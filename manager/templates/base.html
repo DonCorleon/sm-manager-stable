@@ -1,0 +1,158 @@
+<!doctype html>
+{# data-theme drives DaisyUI's color tokens. ui_theme is injected by
+   the @context_processor in manager/app.py from settings (ui.theme),
+   default "dark". Operator changes the choice in /settings -> Web UI
+   tab; takes effect on next render. #}
+<html lang="en" data-theme="{{ ui_theme | default('dark') }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Soulmask Manager{% endblock %}</title>
+
+  {# ── CSS ──────────────────────────────────────────────────────────
+     DaisyUI 5 standalone build -- pre-built CSS for components and
+     themes. Loaded BEFORE the Tailwind v4 browser build so utility
+     classes (text-sm, bg-slate-800, etc.) win cascade order over
+     DaisyUI's component defaults where they overlap. See
+     memory/webui_stack_versions.md for the version pin rationale. #}
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css">
+
+  {# Tippy.js v6 default CSS -- attached automatically by the
+     tippy-bundle script below, but linking explicitly is harmless and
+     avoids a flash-of-unstyled-tooltip on first hover. #}
+  <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css">
+
+  {# ── JS ───────────────────────────────────────────────────────────
+     Tailwind v4 browser build (replaces legacy cdn.tailwindcss.com
+     which was frozen on v3 and incompatible with DaisyUI 5). #}
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  {# HTMX + sse extension -- still used by /dashboard for the live
+     status partial swap. /updates, /backups, /install moved to plain
+     EventSource; /dashboard could too but works fine for now. #}
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+
+  {# Tippy.js v6 + Popper 2. Popper MUST load before Tippy or the
+     UMD bundle throws on init. Tippy v6 is feature-frozen but stable;
+     touch behaviour (tap-to-show, dismiss-on-tap-outside) is the
+     default with no config needed. #}
+  <script src="https://unpkg.com/@popperjs/core@2"></script>
+  <script src="https://unpkg.com/tippy.js@6"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <header class="bg-slate-800 border-b border-slate-700 relative">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+      <a href="/" class="text-lg sm:text-xl font-semibold hover:text-emerald-300">Soulmask Manager</a>
+
+      {# Hamburger -- visible only below the sm breakpoint. Toggles
+         #site-nav's `is-open` class; CSS makes that show the column
+         on small screens. Aria-expanded is updated by the click
+         handler so screen readers stay in sync. #}
+      <button id="nav-toggle" type="button"
+              aria-controls="site-nav" aria-expanded="false"
+              class="sm:hidden inline-flex items-center justify-center
+                     w-11 h-11 rounded text-slate-300
+                     hover:text-white hover:bg-slate-700
+                     focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              aria-label="Open navigation menu">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      {# Nav: horizontal row at sm+, vertical drop-down panel below sm
+         (only visible when toggled via #nav-toggle). The panel sits
+         right below the header bar; tapping any link follows the
+         href as normal which navigates away and reloads, so we don't
+         need to manually close on click. #}
+      <nav id="site-nav"
+           class="hidden sm:flex sm:gap-5 text-sm
+                  absolute sm:static top-full left-0 right-0
+                  bg-slate-800 sm:bg-transparent border-b sm:border-0 border-slate-700
+                  flex-col sm:flex-row gap-1 px-4 sm:px-0 py-3 sm:py-0
+                  z-50">
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/">Dashboard</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/logs/">Logs</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/map/">Map</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/backups/">Backups</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/mods/">Mods</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/settings/">Settings</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/updates/">Updates</a>
+        <a class="block py-2 sm:py-0 hover:text-white text-slate-300" href="/setup/">Setup</a>
+      </nav>
+    </div>
+  </header>
+
+  <script>
+    {# Hamburger toggle. Sets aria-expanded and flips the `hidden`
+       class on the nav element. CSS keeps the desktop layout via
+       sm:flex so this only affects the small-screen rendering. #}
+    (function () {
+      var btn = document.getElementById('nav-toggle');
+      var nav = document.getElementById('site-nav');
+      if (!btn || !nav) return;
+      btn.addEventListener('click', function () {
+        var open = nav.classList.toggle('hidden') === false;
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    })();
+  </script>
+
+  <main class="max-w-5xl mx-auto px-4 py-6 relative">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="max-w-5xl mx-auto px-4 py-4 text-xs text-slate-500">
+    Soulmask Manager
+  </footer>
+  {# Loading-state wiring (delegated, attached once). Any form marked
+     data-busy-text="..." disables its submit button and swaps the
+     button text to that string when submitted, so the operator gets
+     immediate visual feedback during slow ops (Steam check, git
+     fetch, etc.). The standard form POST -> redirect cycle re-renders
+     the page on success OR error, so the button comes back fresh
+     either way -- no manual re-enable code needed. We delegate at
+     document level so the dashboard partial swap (every ~5s via SSE)
+     doesn't need to re-attach handlers. #}
+  <script>
+    document.addEventListener('submit', function(e) {
+      var f = e.target;
+      if (!f || !f.matches || !f.matches('form[data-busy-text]')) return;
+      if (e.defaultPrevented) return;
+      var btn = f.querySelector('button[type=submit]');
+      if (btn && !btn.disabled) {
+        btn.textContent = f.dataset.busyText;
+        btn.disabled = true;
+      }
+    });
+  </script>
+
+  {# Tooltip wiring. Any element with data-tip="text" gets a tippy
+     popover on hover (desktop) or tap (touch). Cheap to call repeatedly
+     because tippy() is idempotent on already-attached elements when
+     given the same selector. We re-run it after each htmx swap so SSE-
+     refreshed dashboard partials pick up tooltips on newly-rendered
+     elements. #}
+  <script>
+    function smInitTooltips(root) {
+      if (typeof tippy !== 'function') return;
+      var scope = root || document;
+      tippy(scope.querySelectorAll('[data-tip]'), {
+        content: function (el) { return el.dataset.tip; },
+        allowHTML: false,
+        delay: [200, 0],
+        maxWidth: 320,
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      smInitTooltips();
+    });
+    document.body.addEventListener('htmx:afterSwap', function (e) {
+      smInitTooltips(e.target);
+    });
+  </script>
+</body>
+</html>

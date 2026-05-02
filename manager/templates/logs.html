@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}Logs · Soulmask Manager{% endblock %}
+{% block content %}
+
+<div class="space-y-3">
+
+  <div class="flex items-center justify-between flex-wrap gap-2">
+    <h2 class="text-lg font-semibold">Live logs</h2>
+    <div class="flex items-center gap-3 text-sm">
+      <label class="flex items-center gap-1 cursor-pointer">
+        <input id="autoscroll" type="checkbox" checked>
+        <span class="text-slate-300">auto-scroll</span>
+      </label>
+      <label class="flex items-center gap-1 cursor-pointer">
+        <input id="paused" type="checkbox">
+        <span class="text-slate-300">pause stream</span>
+      </label>
+      <button id="clear-btn"
+              class="bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-xs">
+        Clear
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabs: stack vertically on small screens (label could wrap), horizontal on md+ -->
+  <div class="flex flex-wrap gap-1 border-b border-slate-700">
+    {% for name, tailer in tailers.items() %}
+    <button data-tab="{{ name }}"
+            class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent
+                   text-slate-300 hover:text-white">
+      {{ labels.get(name, name) }}
+      <span class="text-xs text-slate-500">({{ name }})</span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <!-- Filter -->
+  <div class="flex flex-col sm:flex-row gap-2">
+    <input id="filter" type="text" placeholder="Filter (substring match, case-insensitive)..."
+           class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm flex-1
+                  focus:border-emerald-500 focus:outline-none">
+    <span id="line-counter" class="text-xs text-slate-500 self-center">0 lines</span>
+  </div>
+
+  <!-- Log panel. Height adapts to viewport -- no scrollbar wars on mobile. -->
+  <pre id="log-panel"
+       class="bg-slate-950 border border-slate-700 rounded p-3
+              text-[11px] sm:text-xs font-mono whitespace-pre-wrap break-all
+              h-[55vh] sm:h-[65vh] overflow-y-auto leading-snug"></pre>
+
+  {# Translation-span styling. The .tr class wraps inline English
+     translations of Chinese phrases / pinyin BP_ asset names in the
+     log lines. Mint green so it's easy to skim. The original token
+     stays alongside (e.g. "RuQin [Invasion]") so the operator can
+     see where the translation came from. Toggle the feature on/off
+     via /settings/ -> ui.translate_chinese_terms. #}
+  <style>
+    #log-panel .tr {
+        color: #6ee7b7;
+        opacity: 0.85;
+        font-style: italic;
+    }
+  </style>
+
+  <p class="text-xs text-slate-500">
+    SSE connection to <code id="sse-url" class="text-slate-400"></code>.
+    State: <span id="sse-state" class="font-mono">idle</span>.
+  </p>
+
+</div>
+
+<script>
+(function () {
+  const panel       = document.getElementById('log-panel');
+  const filterInput = document.getElementById('filter');
+  const counterEl   = document.getElementById('line-counter');
+  const autoEl      = document.getElementById('autoscroll');
+  const pauseEl     = document.getElementById('paused');
+  const clearBtn    = document.getElementById('clear-btn');
+  const stateEl     = document.getElementById('sse-state');
+  const urlEl       = document.getElementById('sse-url');
+  const tabs        = document.querySelectorAll('.tab-btn');
+
+  // Per-tab line buffer (so switching back to a tab restores its history
+  // without reconnecting). Map<tabName, Array<{ts, line}>>.
+  const buffers = new Map();
+  const MAX_BUFFER = 2000;
+
+  let currentTab = null;
+  let eventSource = null;
+
+  function setState(s, css) {
+    stateEl.textContent = s;
+    stateEl.className = 'font-mono ' + (css || 'text-slate-400');
+  }
+
+  function fmtTime(ts) {
+    const d = new Date(ts * 1000);
+    return d.toTimeString().slice(0, 8);
+  }
+
+  function lineMatchesFilter(line) {
+    const f = filterInput.value.trim();
+    if (!f) return true;
+    return line.toLowerCase().includes(f.toLowerCase());
+  }
+
+  function appendToPanel(ts, line, lineHtml) {
+    if (pauseEl.checked) return;
+    // Filter on raw line, not HTML -- so the user types "death" and we
+    // match the raw English log content, not the inline translation.
+    if (!lineMatchesFilter(line)) return;
+    panel.appendChild(buildLineNode(ts, line, lineHtml));
+    // Trim DOM if it grows too large (perf).
+    while (panel.children.length > MAX_BUFFER) {
+      panel.removeChild(panel.firstChild);
+    }
+    counterEl.textContent = panel.children.length + ' lines';
+    if (autoEl.checked) {
+      panel.scrollTop = panel.scrollHeight;
+    }
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Build one log line as a DOM node ready to be appended. Shared by
+  // appendToPanel (live SSE) and rebuildPanel (filter / tab change).
+  function buildLineNode(ts, line, lineHtml) {
+    const ln = document.createElement('div');
+    // If the server pre-rendered an annotated HTML version (translate
+    // setting on), trust it -- it's already escape-safe and includes
+    // <span class="tr"> spans for the translated phrases. Otherwise
+    // escape the raw line ourselves.
+    const body = (typeof lineHtml === 'string' && lineHtml.length > 0)
+        ? lineHtml
+        : escapeHtml(line);
+    ln.innerHTML =
+      '<span class="text-slate-600">' + fmtTime(ts) + '</span>  ' + body;
+    return ln;
+  }
+
+  function rebuildPanel() {
+    // Batch the rebuild into a single DOM splice via DocumentFragment.
+    // Without this, a 2000-line buffer triggers 2000 panel.appendChild
+    // calls plus 2000 counterEl.textContent assignments per keystroke
+    // -- noticeable pause on filter clear especially.
+    const buf = buffers.get(currentTab) || [];
+    const frag = document.createDocumentFragment();
+    let renderedCount = 0;
+    for (const item of buf) {
+      if (!lineMatchesFilter(item.line)) continue;
+      frag.appendChild(buildLineNode(item.ts, item.line, item.line_html));
+      renderedCount++;
+    }
+    panel.innerHTML = '';
+    panel.appendChild(frag);
+    counterEl.textContent = renderedCount + ' lines';
+    if (autoEl.checked) {
+      panel.scrollTop = panel.scrollHeight;
+    }
+  }
+
+  function bufferLine(tab, ts, line, lineHtml) {
+    let buf = buffers.get(tab);
+    if (!buf) { buf = []; buffers.set(tab, buf); }
+    buf.push({ ts, line, line_html: lineHtml });
+    while (buf.length > MAX_BUFFER) buf.shift();
+  }
+
+  function resetTabState(tab) {
+    // Drop the per-tab buffer + clear the panel. Called on every tab
+    // switch and on every (re)connect to a tab. Reason: the SSE backend
+    // unconditionally sends a history-burst on connect, so if we leave
+    // the buffer in place those history lines get appended on top of
+    // what's already there -- visible duplicates. Always start clean
+    // and let the SSE re-supply.
+    buffers.set(tab, []);
+    panel.innerHTML = '';
+    counterEl.textContent = '0 lines';
+  }
+
+  function switchTab(tab) {
+    if (currentTab === tab) return;
+    currentTab = tab;
+
+    tabs.forEach(b => {
+      const active = b.dataset.tab === tab;
+      b.classList.toggle('border-emerald-400', active);
+      b.classList.toggle('text-white', active);
+      b.classList.toggle('text-slate-300', !active);
+    });
+
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+
+    resetTabState(tab);
+    connectSSE(tab);
+  }
+
+  function connectSSE(tab) {
+    const url = '/logs/sse/' + encodeURIComponent(tab);
+    urlEl.textContent = url;
+    setState('connecting...', 'text-amber-300');
+
+    // The SSE backend re-sends history on every (re)connect. Drop the
+    // local buffer so the history-burst doesn't double up. Any lines
+    // we'd lose this way will be re-supplied by the burst itself.
+    resetTabState(tab);
+
+    const es = new EventSource(url);
+    eventSource = es;
+
+    es.onopen = () => {
+      setState('connected', 'text-emerald-400');
+    };
+    es.onerror = () => {
+      // EventSource auto-reconnects. Just reflect the state.
+      // Note: when EventSource auto-reconnects under the hood, our
+      // onmessage handler stays attached and the backend will replay
+      // history. Without resetTabState on connect, that produced
+      // duplicates after a transient network blip too.
+      setState('reconnecting...', 'text-amber-300');
+    };
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        const { ts, line, line_html } = data;
+        if (tab !== currentTab) {
+          // We only buffer/render for the active tab. Other tabs' buffers
+          // get filled when the user switches to them and the SSE fires.
+          return;
+        }
+        bufferLine(tab, ts, line, line_html);
+        appendToPanel(ts, line, line_html);
+      } catch (err) {
+        console.warn('SSE parse error', err, e.data);
+      }
+    };
+  }
+
+  // Filter input: debounced so rapid typing / deleting doesn't trigger
+  // a full rebuild on every keystroke. 150ms feels responsive while
+  // collapsing a multi-character backspace into a single rebuild.
+  let filterDebounceTimer = null;
+  filterInput.addEventListener('input', () => {
+    if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = setTimeout(rebuildPanel, 150);
+  });
+  clearBtn.addEventListener('click', () => {
+    buffers.set(currentTab, []);
+    panel.innerHTML = '';
+    counterEl.textContent = '0 lines';
+  });
+
+  tabs.forEach(b => {
+    b.addEventListener('click', () => switchTab(b.dataset.tab));
+  });
+
+  // Default: open the first tab.
+  if (tabs.length) {
+    switchTab(tabs[0].dataset.tab);
+  }
+})();
+</script>
+{% endblock %}

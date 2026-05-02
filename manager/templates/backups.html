@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}Backups · Soulmask Manager{% endblock %}
+{% block content %}
+
+{# Backup op-state is pushed via /backups/sse (no browser polling).
+   On state transitions we trigger a full reload because the snapshot
+   list changes (a finished snapshot needs a new row). For mid-op
+   progress / elapsed updates we patch the DOM in place without a
+   reload. Wired up at the bottom of the page. #}
+
+<!-- Header / op banner -->
+<div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mb-4">
+  <div class="flex items-center justify-between">
+    <div>
+      <h2 class="text-lg font-semibold">Backups</h2>
+      <p class="text-xs text-slate-400 mt-1">
+        World-database snapshots via EchoPort <code>bk</code>, integrity-checked,
+        gzipped, and tracked here. Manager config (settings, GameXishu, Engine.ini)
+        is bundled alongside each cluster snapshot.
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      {% if op.in_progress %}
+        <div id="op-banner"
+             class="text-amber-300 text-sm flex flex-col items-end">
+          <span class="font-medium">
+            &#9881; <span id="op-label">{{ op.label }}</span>
+            (<span id="op-elapsed">{{ op.elapsed_seconds }}</span>s)
+          </span>
+          <span id="op-progress"
+                class="text-xs text-slate-400 max-w-md text-right truncate"
+                title="{{ op.progress }}"
+                {% if not op.progress %}style="display:none"{% endif %}>{{ op.progress }}</span>
+        </div>
+      {% elif running_count == 0 %}
+        <span class="text-xs text-slate-400 italic">
+          no servers running -- start a server to enable backup
+        </span>
+      {% else %}
+        <form method="POST" action="{{ url_for('backups.run_now') }}"
+              onsubmit="return confirm('Run a cluster snapshot of {{ running_count }} running instance(s)?\n\nThis will fire `bk` on each, integrity-check, gzip, and bundle the manager config. Takes ~10-30 sec per instance for normal world sizes.')">
+          <button type="submit"
+                  class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+            Backup now ({{ running_count }})
+          </button>
+        </form>
+      {% endif %}
+      {% if snapshots %}
+        <form method="POST" action="{{ url_for('backups.clear_all') }}"
+              onsubmit="return confirm('Clear ALL non-pinned snapshots except the most recent one per instance?\n\nPinned legs are NEVER touched. The newest unpinned leg per instance is kept as a working baseline. Everything else is deleted from disk + index.');">
+          <button type="submit"
+                  class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded text-sm">
+            Clear all but latest
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Snapshot list -->
+{% if not snapshots %}
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700 text-center text-slate-400">
+    No snapshots yet. Click "Backup now" above to make the first one.
+  </div>
+{% else %}
+  <div class="space-y-3">
+  {% for snap in snapshots %}
+    <div class="bg-slate-800 rounded-lg border
+                {% if snap.partial %}border-amber-700{% else %}border-slate-700{% endif %}">
+      <!-- Snapshot header row -->
+      <div class="px-4 py-3 flex items-center justify-between border-b border-slate-700">
+        <div class="flex items-baseline gap-3 flex-wrap">
+          <span class="font-mono text-base">{{ snap.ts }}</span>
+          <span class="text-xs text-slate-400">{{ snap.age }}</span>
+          <span class="text-xs uppercase font-mono px-2 py-0.5 rounded
+                       bg-slate-700 text-slate-300">
+            {{ snap.source }}
+          </span>
+          {% if snap.build_id %}
+            <span class="text-xs text-slate-500 font-mono"
+                  title="Game build at time of snapshot">
+              build {{ snap.build_id }}
+            </span>
+          {% endif %}
+          {% if snap.partial %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded
+                         bg-amber-700 text-amber-100"
+                  title="Not all instances were captured -- see legs below">
+              partial
+            </span>
+          {% endif %}
+          {% if snap.any_pinned %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded
+                         bg-purple-800 text-purple-100">
+              pinned
+            </span>
+          {% endif %}
+          {% if snap.restored_at %}
+            <span class="text-xs font-mono px-2 py-0.5 rounded
+                         bg-blue-900/40 text-blue-200 border border-blue-800"
+                  title="The world was last restored from this snapshot at this time.">
+              &#8631; restored from {{ snap.restored_at }}
+            </span>
+          {% endif %}
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-400 font-mono">
+            total {{ snap.total_size_human }}
+          </span>
+          <a href="{{ url_for('backups.restore_prepare', ts=snap.ts) }}"
+             class="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-50">
+            Restore...
+          </a>
+          <form method="POST"
+                action="{{ url_for('backups.delete_snapshot', ts=snap.ts) }}"
+                class="inline"
+                onsubmit="return confirm('Delete the entire {{ snap.ts }} snapshot ({{ snap.legs|length }} leg(s))?\n\nPinned legs are skipped -- unpin them first to delete the whole snapshot.');">
+            <button type="submit"
+                    class="text-xs px-2 py-1 rounded bg-rose-900 hover:bg-rose-800 text-rose-100">
+              Delete
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Per-leg rows -->
+      <div class="divide-y divide-slate-700/50">
+        {% for leg in snap.legs %}
+          <div class="px-4 py-2 grid grid-cols-12 items-center gap-3 text-sm">
+            <div class="col-span-3">
+              <span class="font-mono">{{ leg.instance }}</span>
+              {% if leg.error %}
+                <div class="text-xs text-rose-300 mt-0.5"
+                     title="{{ leg.error }}">failed: {{ leg.error }}</div>
+              {% endif %}
+            </div>
+            <div class="col-span-2 font-mono text-xs">
+              {% if leg.size_bytes %}{{ leg.size_human }}{% else %}--{% endif %}
+            </div>
+            <div class="col-span-2 text-xs">
+              {% if leg.integrity == "ok" %}
+                <span class="text-emerald-400">&#10003; integrity ok</span>
+              {% elif leg.integrity == "corrupt" %}
+                <span class="text-rose-400">&#10007; corrupt</span>
+              {% else %}
+                <span class="text-slate-500">{{ leg.integrity }}</span>
+              {% endif %}
+            </div>
+            <div class="col-span-2 text-xs text-slate-400 font-mono truncate"
+                 title="{{ leg.file or '(no file -- failed leg)' }}">
+              {% if leg.file %}{{ leg.file }}{% else %}<span class="italic">no file</span>{% endif %}
+            </div>
+            <div class="col-span-3 flex items-center justify-end gap-1">
+              {% if leg.file %}
+                <a href="{{ url_for('backups.download', ts=leg.ts, instance=leg.instance) }}"
+                   class="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">
+                  Download
+                </a>
+                <form method="POST"
+                      action="{{ url_for('backups.pin', ts=leg.ts, instance=leg.instance) }}"
+                      class="inline">
+                  <input type="hidden" name="pinned" value="{{ '0' if leg.pinned else '1' }}">
+                  <button type="submit"
+                          class="text-xs px-2 py-1 rounded
+                                 {% if leg.pinned %}bg-purple-800 hover:bg-purple-700 text-purple-100
+                                 {% else %}bg-slate-700 hover:bg-slate-600{% endif %}">
+                    {% if leg.pinned %}Unpin{% else %}Pin{% endif %}
+                  </button>
+                </form>
+                <form method="POST"
+                      action="{{ url_for('backups.delete', ts=leg.ts, instance=leg.instance) }}"
+                      class="inline"
+                      onsubmit="return confirm('Delete the {{ leg.instance }} leg of snapshot {{ leg.ts }}? The .db.gz file will be removed permanently.');">
+                  <button type="submit"
+                          {% if leg.pinned %}disabled
+                          title="Unpin first to delete"
+                          class="text-xs px-2 py-1 rounded bg-slate-800 text-slate-500 cursor-not-allowed"
+                          {% else %}
+                          class="text-xs px-2 py-1 rounded bg-rose-900 hover:bg-rose-800 text-rose-100"
+                          {% endif %}>
+                    Delete
+                  </button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      {% if snap.config_bundle %}
+        <div class="px-4 py-2 border-t border-slate-700/50 text-xs text-slate-500 flex items-center justify-between">
+          <span class="font-mono truncate" title="{{ snap.config_bundle }}">
+            config bundle: {{ snap.config_bundle }}
+          </span>
+        </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+{% endif %}
+
+{# Live op-state via SSE. No browser polling. On state transitions
+   (in_progress flag flips) reload to refresh the snapshot list.
+   On mid-op progress updates patch label/elapsed/progress in place. #}
+<script>
+(function () {
+  let lastInProgress = {{ 'true' if op.in_progress else 'false' }};
+  const es = new EventSource("/backups/sse");
+  es.addEventListener("op", function (e) {
+    let s;
+    try { s = JSON.parse(e.data); } catch (err) { return; }
+    if (s.in_progress !== lastInProgress) {
+      // Transition: list of snapshots and banner shape have probably
+      // changed -- a full reload is the right move.
+      location.reload();
+      return;
+    }
+    if (s.in_progress) {
+      // Mid-op tick: update banner text without reloading.
+      const label = document.getElementById("op-label");
+      const elapsed = document.getElementById("op-elapsed");
+      const progress = document.getElementById("op-progress");
+      if (label && s.label) label.textContent = s.label;
+      if (elapsed) elapsed.textContent = s.elapsed_seconds;
+      if (progress) {
+        if (s.progress) {
+          progress.textContent = s.progress;
+          progress.title = s.progress;
+          progress.style.display = "";
+        } else {
+          progress.style.display = "none";
+        }
+      }
+    }
+  });
+  // EventSource auto-reconnects on transient drop (retry: 5000 from
+  // the server). No manual recovery needed.
+})();
+</script>
+
+{% endblock %}

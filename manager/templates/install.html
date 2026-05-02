@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Install · Soulmask Manager{% endblock %}
+{% block content %}
+<div class="space-y-5 max-w-3xl">
+
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <div class="flex items-baseline justify-between">
+      <h2 class="text-lg font-semibold">Install</h2>
+      <a href="/setup/preview" class="text-sm text-slate-400 hover:text-white">&larr; Back to preview</a>
+    </div>
+    <p class="text-sm text-slate-400 mt-1">
+      SteamCMD bootstrap (~5&nbsp;MB, &lt;1&nbsp;min) followed by the Soulmask dedicated server install
+      (~5&ndash;15&nbsp;GB, 10&ndash;30&nbsp;min). Output streams below in real time via SSE.
+    </p>
+  </div>
+
+  {# Initial render uses the partial; subsequent updates patch DOM in
+     place via /setup/install/sse. No browser-side polling. #}
+  <div id="status-panel">
+    {% include "_install_status.html" %}
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // Live install-state stream. Replaces the old HTMX every-2s poll.
+  // Patches the existing partial's DOM elements in place; on terminal
+  // status we close the stream and reload to swap the action buttons
+  // (Re-run / Continue / Retry) which depend on jinja-only conditionals.
+  const es = new EventSource("/setup/install/sse");
+  let lastLineCount = -1;
+  let lastStatus = null;
+
+  function setStatusBadge(status) {
+    const badge = document.querySelector("#status-panel span.text-xs");
+    if (!badge) return;
+    badge.textContent = status;
+    badge.classList.remove("bg-amber-700", "text-amber-100",
+                           "bg-emerald-700", "text-emerald-100",
+                           "bg-rose-700", "text-rose-100",
+                           "bg-slate-700", "text-slate-200");
+    if (status === "running") {
+      badge.classList.add("bg-amber-700", "text-amber-100");
+    } else if (status === "completed") {
+      badge.classList.add("bg-emerald-700", "text-emerald-100");
+    } else if (status === "failed") {
+      badge.classList.add("bg-rose-700", "text-rose-100");
+    } else {
+      badge.classList.add("bg-slate-700", "text-slate-200");
+    }
+  }
+
+  function appendNewLines(lines) {
+    const pre = document.getElementById("output-pre");
+    if (!pre) return;
+    const fromIdx = lastLineCount >= 0 ? lastLineCount : 0;
+    if (lines.length <= fromIdx) return;
+    const stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 32;
+    const frag = document.createDocumentFragment();
+    for (let i = fromIdx; i < lines.length; i++) {
+      const [ts, line] = lines[i];
+      const tsEl = document.createElement("span");
+      tsEl.className = "text-slate-600";
+      tsEl.textContent = ts;
+      frag.appendChild(tsEl);
+      frag.appendChild(document.createTextNode("  " + line + "\n"));
+    }
+    pre.appendChild(frag);
+    if (stick) pre.scrollTop = pre.scrollHeight;
+  }
+
+  es.addEventListener("state", function (e) {
+    let s;
+    try { s = JSON.parse(e.data); } catch (err) { return; }
+
+    setStatusBadge(s.status);
+
+    // Step text -- second .text-base.font-medium span in the header
+    const step = document.querySelector("#status-panel span.text-base");
+    if (step) step.textContent = s.step || "(not started)";
+
+    // Append any new output lines without re-rendering the whole pre.
+    appendNewLines(s.lines || []);
+    lastLineCount = (s.lines || []).length;
+
+    // On terminal-state transition, reload once to swap the
+    // status-dependent action buttons (Continue / Re-run / Retry).
+    if (lastStatus !== null
+        && s.status !== lastStatus
+        && (s.status === "completed" || s.status === "failed")) {
+      es.close();
+      location.reload();
+      return;
+    }
+    lastStatus = s.status;
+  });
+})();
+</script>
+
+{% endblock %}

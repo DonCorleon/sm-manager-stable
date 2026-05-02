@@ -1,0 +1,352 @@
+{# HTMX partial: rendered on initial dashboard load AND every 5s for live updates. #}
+
+<!-- Overall banner -->
+<div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mb-4 flex items-center justify-between">
+  <div>
+    {% if status.op_in_progress %}
+      {# Only the genuinely-slow case shows a warning tone in the UI.
+         The mid-level 'slow' threshold (5 min) is for log heartbeats only --
+         operator's server can routinely take 10+ min for ops, so warning at
+         5 min in the UI was premature. #}
+      {% if status.op_warning_level == 'very_slow' %}
+        <span class="text-rose-400 font-medium">&#9888; {{ status.op_name|upper }} unusually slow ({{ status.op_elapsed_human }} elapsed)</span>
+      {% else %}
+        <span class="text-amber-300 font-medium">&#9881; {{ status.op_name|upper }} in progress ({{ status.op_elapsed_human }} elapsed)</span>
+      {% endif %}
+    {% elif status.all_running %}
+      <span class="text-emerald-400 font-medium">&#11044; All servers running</span>
+    {% elif status.any_running %}
+      <span class="text-amber-300 font-medium">&#11044; Partial: {{ status.running_count }} of {{ status.instance_count }} running</span>
+    {% elif status.instance_count == 0 %}
+      <span class="text-slate-400">No instances configured. Run the wizard.</span>
+    {% else %}
+      <span class="text-slate-400 font-medium">&#11044; All servers stopped</span>
+    {% endif %}
+  </div>
+  <div class="flex gap-2 items-center">
+    {% if status.any_running %}
+      <form method="POST" action="/server/login-lock/cluster" class="inline">
+        <input type="hidden" name="locked" value="{{ '0' if status.cluster_login_locked else '1' }}">
+        <button type="submit"
+                class="text-xs px-2 py-1 rounded font-mono uppercase
+                       {% if status.cluster_login_locked %}
+                         bg-purple-700 hover:bg-purple-600 text-purple-100
+                       {% else %}
+                         bg-slate-700 hover:bg-slate-600 text-slate-200
+                       {% endif %}"
+                title="Toggle cluster-wide login lock (sl 0/1 on every running instance)">
+          {% if status.cluster_login_locked %}
+            &#128274; logins locked
+          {% else %}
+            &#128275; allow logins
+          {% endif %}
+        </button>
+      </form>
+    {% endif %}
+    {% if status.any_shutting_down %}
+      {# A stop is in flight on at least one instance. Offer Cancel.
+         If cc succeeds the badge flips back to running; if cc was too
+         late, the instance auto-restarts after exit. #}
+      <form method="POST" action="/server/cancel-shutdown"
+            onsubmit="return confirm('Cancel the in-flight shutdown?\n\nIf the in-game countdown is still running, this sends `cc` to abort it. If the server is already mid-save (empty-server case), the manager will wait for it to exit and auto-restart it.');">
+        <button type="submit"
+                class="bg-amber-600 hover:bg-amber-500 px-3 py-2 rounded text-sm font-medium">
+          Cancel shutdown
+        </button>
+      </form>
+    {% endif %}
+    {% if status.instance_count > 0 and not status.op_in_progress %}
+      {% if not status.all_running %}
+        {# Start UI: simple button in single-instance setups; dropdown
+           with All / per-instance choices in cluster setups so the
+           operator can start just main, just child, or both. The
+           dropdown only lists instances that AREN'T already running --
+           picking an already-running one would just be a no-op. #}
+        {% if status.instance_count == 1 %}
+          <form method="POST" action="/server/start">
+            <button type="submit"
+                    class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+              Start server
+            </button>
+          </form>
+        {% else %}
+          <form method="POST" action="/server/start"
+                class="flex items-center gap-2"
+                onsubmit="return confirmStartTarget(this);">
+            <label class="text-xs text-slate-400">Start:</label>
+            <select id="start-target" name="target" hx-preserve="true"
+                    class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm">
+              {% if not status.any_running %}
+                <option value="all" selected>All ({{ status.instance_count }})</option>
+              {% else %}
+                {% set remaining = status.instance_count - status.running_count %}
+                <option value="all" selected>Remaining ({{ remaining }})</option>
+              {% endif %}
+              {% for inst in status.instances if not inst.running %}
+                <option value="{{ inst.map_name }}"
+                        data-role="{{ inst.role }}"
+                        data-name="{{ inst.name }}">
+                  {{ inst.name }}{% if inst.role == 'child' %} (child){% endif %}
+                </option>
+              {% endfor %}
+            </select>
+            <button type="submit"
+                    class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+              Start
+            </button>
+          </form>
+          <script>
+            // Warn before starting a child server when its main isn't
+            // running yet -- the child will spawn but its cluster link
+            // (-clientserverconnect) can't reach a non-existent main, so
+            // it'll loop or fail to fully boot. Operator still gets to
+            // proceed if they're doing a manual recovery flow.
+            window.confirmStartTarget = function (form) {
+              var sel = form.querySelector('select[name="target"]');
+              if (!sel) return true;
+              var opt = sel.options[sel.selectedIndex];
+              if (!opt || opt.dataset.role !== 'child') return true;
+              {% if status.any_running %}
+                {# Check if main is in the running set. "main" role is the
+                   one with -mainserverport=N. Look it up in status.instances. #}
+                var mainRunning = {{
+                  ('true' if (status.instances
+                              | selectattr('role', 'equalto', 'main')
+                              | selectattr('running')
+                              | list) else 'false')
+                }};
+              {% else %}
+                var mainRunning = false;
+              {% endif %}
+              if (!mainRunning) {
+                return confirm(
+                  'Start ' + (opt.dataset.name || 'child') + ' WITHOUT the main server running?\n\n' +
+                  'The child server uses a cluster-link to talk to main; with main offline ' +
+                  'the child will spawn but its link won\\'t complete. Only do this for a ' +
+                  'manual recovery / debugging flow. Continue?'
+                );
+              }
+              return true;
+            };
+          </script>
+        {% endif %}
+      {% endif %}
+      {% if status.any_running %}
+        <form method="POST" action="/server/stop"
+              class="flex items-center gap-2"
+              onsubmit="return confirm('Graceful stop with ' + this.countdown_sec.value + 's in-game warning. Continue?')">
+          <label class="text-xs text-slate-400">Warn:</label>
+          {# hx-preserve keeps user's selection across the 5s polling swap.
+             Without this, the dropdown closes and resets to the default
+             every refresh -- noticeable when the user is mid-pick. #}
+          <select id="stop-countdown" name="countdown_sec" hx-preserve="true"
+                  class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm">
+            <option value="1">Now</option>
+            <option value="30" selected>30 sec</option>
+            <option value="60">1 min</option>
+            <option value="180">3 min</option>
+            <option value="300">5 min</option>
+            <option value="600">10 min</option>
+            <option value="900">15 min</option>
+          </select>
+          <button type="submit"
+                  class="bg-rose-600 hover:bg-rose-500 px-4 py-2 rounded text-sm font-medium">
+            Stop ({{ status.running_count }})
+          </button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+{% if status.op_in_progress and status.op_warning_level == 'very_slow' %}
+<!-- Only show the explainer card for the genuine very-slow case. -->
+<div class="rounded-lg p-4 border mb-4 bg-rose-900/20 border-rose-700 text-rose-200">
+  <div class="text-sm">
+    <strong>This {{ status.op_name }} has been running for {{ status.op_elapsed_human }}.</strong>
+    That is unusually long even for a slow server. Check the in-game console / RDP /
+    Task Manager. The manager will keep monitoring (no timeouts will kill anything),
+    but consider whether the server is actually responsive.
+  </div>
+</div>
+{% endif %}
+
+<!-- Combined update status (Steam + Manager git) with one action button.
+     Replaced the two separate cards + per-card Check / Update+Restart
+     buttons that were here previously. Operator goes to /updates for
+     all checking and updating; the dashboard just shows the situation. -->
+{% if updates or manager_update %}
+<div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mb-4">
+  <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <div class="space-y-1 text-sm flex-1 min-w-0">
+      {% if updates %}
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-slate-400 w-20 shrink-0">Server</span>
+          <span class="font-mono text-xs">{{ updates.local_buildid or "?" }}</span>
+          <span class="text-slate-600">&rarr;</span>
+          <span class="font-mono text-xs">
+            {% if updates.remote_buildid %}{{ updates.remote_buildid }}
+            {% else %}<span class="text-slate-500 italic">(not checked)</span>{% endif %}
+          </span>
+          {% if updates.update_available %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-amber-700 text-amber-100">UPDATE</span>
+          {% elif updates.local_buildid and updates.remote_buildid %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-emerald-800 text-emerald-100">up to date</span>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if manager_update %}
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-slate-400 w-20 shrink-0">Manager</span>
+          <span class="font-mono text-xs">
+            {% if manager_update.current_sha %}{{ manager_update.current_sha[:12] }}
+            {% else %}?{% endif %}
+          </span>
+          <span class="text-slate-600">&rarr;</span>
+          <span class="font-mono text-xs">
+            {% if manager_update.upstream_sha %}{{ manager_update.upstream_sha[:12] }}
+            {% else %}<span class="text-slate-500 italic">(not checked)</span>{% endif %}
+          </span>
+          {% if manager_update.update_available %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-amber-700 text-amber-100">{{ manager_update.commits_behind_count }} BEHIND</span>
+          {% elif manager_update.upstream_sha and manager_update.last_check_ok %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-emerald-800 text-emerald-100">up to date</span>
+          {% elif not manager_update.enabled %}
+            <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-slate-700 text-slate-300">poller off</span>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+    <a href="/updates/"
+       class="shrink-0 inline-flex items-center justify-center
+              bg-slate-700 hover:bg-slate-600 text-slate-100
+              px-3 py-2 rounded text-sm font-medium">
+      Manage updates &rarr;
+    </a>
+  </div>
+  {% if (updates and updates.last_error) or (manager_update and manager_update.last_error) %}
+    <div class="mt-2 text-xs text-rose-300 space-y-0.5">
+      {% if updates and updates.last_error %}
+        <div>Steam check error: {{ updates.last_error }}</div>
+      {% endif %}
+      {% if manager_update and manager_update.last_error %}
+        <div>Manager check error: {{ manager_update.last_error }}</div>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Per-instance cards -->
+<div class="grid {% if status.instances|length > 1 %}grid-cols-1 md:grid-cols-2{% else %}grid-cols-1{% endif %} gap-4">
+{% for inst in status.instances %}
+  <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-2">
+      <h3 class="text-base font-semibold
+                 {% if inst.role == 'main' %}text-emerald-300
+                 {% elif inst.role == 'child' %}text-blue-300
+                 {% else %}text-slate-200{% endif %}">
+        {{ inst.name }}
+      </h3>
+      <div class="flex items-center gap-2">
+        {% if inst.adopted and inst.running %}
+          <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                       bg-purple-800 text-purple-100"
+                title="Process was already running when the manager started -- adopted via psutil scan, not spawned by this manager run.">
+            adopted
+          </span>
+        {% endif %}
+        {% if inst.running and inst.login_locked %}
+          <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                       bg-purple-800 text-purple-100"
+                title="New logins are blocked (sl 0). Source: {{ 'cluster lock' if status.cluster_login_locked else 'per-instance lock' }}.">
+            &#128274; locked
+          </span>
+        {% endif %}
+        {% if inst.shutting_down %}
+          <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                       bg-amber-700 text-amber-100"
+                title="SaveAndExit acknowledged. Server is in countdown / save phase. Will flip to 'stopped' once the process tree exits.">
+            shutting down
+          </span>
+        {% elif inst.auto_restart_pending %}
+          <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                       bg-blue-700 text-blue-100"
+                title="Cancel arrived after the in-game countdown elapsed. The manager is auto-restarting this instance.">
+            auto-restart pending
+          </span>
+        {% elif inst.running %}
+          <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                       bg-emerald-700 text-emerald-100">
+            running
+          </span>
+        {% else %}
+          <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                       bg-slate-700 text-slate-300">
+            stopped
+          </span>
+        {% endif %}
+      </div>
+    </div>
+
+    <dl class="grid grid-cols-3 gap-y-1 gap-x-4 text-sm">
+      <dt class="text-slate-400">Map</dt>
+      <dd class="col-span-2 font-mono text-xs">{{ inst.map_name }}</dd>
+
+      <dt class="text-slate-400">Role / ID</dt>
+      <dd class="col-span-2"><span class="font-mono">{{ inst.role }}</span> &middot; serverid {{ inst.serverid }}</dd>
+
+      {% if inst.running %}
+        <dt class="text-slate-400">PID</dt>
+        <dd class="col-span-2 font-mono">{{ inst.pid }}</dd>
+
+        <dt class="text-slate-400">Uptime</dt>
+        <dd class="col-span-2">{{ inst.uptime_human }}</dd>
+
+        <dt class="text-slate-400">CPU</dt>
+        <dd class="col-span-2 font-mono">{{ "%.1f"|format(inst.cpu_percent) }}%</dd>
+
+        <dt class="text-slate-400">Memory</dt>
+        <dd class="col-span-2 font-mono">{{ "%.0f"|format(inst.memory_mb) }} MB</dd>
+
+        <dt class="text-slate-400">Players</dt>
+        <dd class="col-span-2">
+          {% if inst.query %}
+            <span class="font-mono">{{ inst.query.players }}/{{ inst.query.max_players }}</span>
+            <span class="text-slate-500 text-xs">(query OK, ping {{ inst.query.ping_ms }}ms)</span>
+          {% else %}
+            <span class="text-slate-500 italic">query not responding (server may be loading)</span>
+          {% endif %}
+        </dd>
+      {% endif %}
+
+      <dt class="text-slate-400">Ports</dt>
+      <dd class="col-span-2 font-mono text-xs text-slate-300">
+        game {{ inst.game_port }} &middot; query {{ inst.query_port }} &middot; echo {{ inst.echo_port }}
+      </dd>
+    </dl>
+
+    {% if inst.running %}
+      <div class="mt-3 pt-3 border-t border-slate-700/50 flex items-center justify-between gap-2">
+        <span class="text-xs text-slate-500">Per-instance lock</span>
+        <form method="POST"
+              action="{{ url_for('dashboard.login_lock_instance', short=inst.short) }}"
+              class="inline">
+          <input type="hidden" name="locked"
+                 value="{{ '0' if inst.login_locked_per_instance else '1' }}">
+          <button type="submit"
+                  class="text-xs px-2 py-1 rounded font-mono
+                         {% if inst.login_locked_per_instance %}
+                           bg-purple-800 hover:bg-purple-700 text-purple-100
+                         {% else %}
+                           bg-slate-700 hover:bg-slate-600 text-slate-300
+                         {% endif %}"
+                  title="Toggle per-instance lock. Cluster lock overrides if on.">
+            {% if inst.login_locked_per_instance %}unlock{% else %}lock{% endif %}
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+{% endfor %}
+</div>

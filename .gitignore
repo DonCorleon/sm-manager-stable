@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtualenv (recreated by start_manager.bat)
+venv/
+.venv/
+
+# Runtime state + secrets (settings.toml, deploy_key, backups index, etc.)
+# Two exceptions: the static map tile pyramid + saraserenity icon set ship
+# with the manager via git so the server gets them on Apply, and the
+# queryable world.sqlite is shipped because the source datamine that
+# builds it lives in tools/ (gitignored).
+data/*
+!data/map/
+!data/map/**
+!data/icons/
+!data/icons/**
+!data/world.sqlite
+
+# Manager log output
+logs/
+
+# SteamCMD bootstrap downloads here
+steamcmd/
+
+# PortableGit lives here (~300MB extracted) -- per-machine, not part
+# of the repo.
+portable/
+
+# Operator-side scripts and data-mining artefacts -- not part of the
+# product. Each operator can keep their own under tools/ on disk
+# without polluting the repo.
+tools/
+
+# Stray files
+error.txt
+*.tmp
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Claude Code per-operator overrides (the shared .claude/ entries
+# stay tracked; .local.json is operator-specific and stays out of git).
+.claude/settings.local.json

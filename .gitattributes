@@ -1,0 +1,25 @@
+# Default for every text file: autodetect, store with LF, check out
+# with the platform default. Eliminates the "false dirty tree from
+# CRLF normalisation" class on Windows.
+* text=auto eol=lf
+
+# Batch files MUST be CRLF or cmd.exe gets cranky.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell scripts: same. cmd.exe doesn't run them but Windows
+# tooling expects CRLF.
+*.ps1 text eol=crlf
+
+# Binary files: never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.gz binary
+*.zip binary
+*.tar binary
+*.7z binary
+*.exe binary

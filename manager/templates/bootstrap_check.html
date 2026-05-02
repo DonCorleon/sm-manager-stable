@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Setup · Soulmask Manager{% endblock %}
+{% block content %}
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700 max-w-3xl">
+    <h2 class="text-lg font-semibold mb-1">Bootstrap status</h2>
+    <p class="text-sm text-slate-400 mb-5">
+      What the manager found on this machine. Anything missing will be installed by the wizard.
+    </p>
+
+    <ul class="space-y-3">
+    {% for c in checks %}
+      <li class="flex items-start gap-3">
+        <span class="font-mono text-lg leading-6
+                     {% if c.passed %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          {% if c.passed %}&check;{% else %}&times;{% endif %}
+        </span>
+        <div class="flex-1">
+          <div class="font-medium">
+            {{ c.name }}
+            {% if not c.passed and c.fixable %}
+              <span class="ml-2 text-xs text-amber-300 bg-amber-900/40 px-2 py-0.5 rounded">
+                wizard can install
+              </span>
+            {% endif %}
+          </div>
+          <div class="text-sm text-slate-400 break-all">{{ c.detail }}</div>
+        </div>
+      </li>
+    {% endfor %}
+    </ul>
+
+    <div class="mt-6 pt-4 border-t border-slate-700 flex items-center justify-between gap-3">
+      <div>
+        {% if all_ok and wizard_done %}
+          <p class="text-emerald-400 mb-0">All prerequisites present and wizard complete.</p>
+        {% elif all_ok %}
+          <p class="text-emerald-400 mb-0">All prerequisites present. Run the wizard to configure your server.</p>
+        {% elif wizard_done %}
+          <p class="text-amber-300 mb-0">Wizard saved, but some prerequisites are still missing. Re-run the wizard or install them manually.</p>
+        {% else %}
+          <p class="text-amber-300 mb-0">Some prerequisites are missing. The wizard will offer to install them.</p>
+        {% endif %}
+      </div>
+      <div class="flex gap-2">
+        {% if wizard_done %}
+          <a href="/setup/preview"
+             class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-sm font-medium">
+            View preview
+          </a>
+        {% endif %}
+        <a href="/setup/wizard"
+           class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+          {% if wizard_done %}Edit wizard{% else %}Run wizard &rarr;{% endif %}
+        </a>
+      </div>
+    </div>
+  </div>
+{% endblock %}

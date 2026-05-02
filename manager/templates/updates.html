@@ -1,0 +1,442 @@
+{% extends "base.html" %}
+{% block title %}Updates · Soulmask Manager{% endblock %}
+{% block content %}
+
+<div class="space-y-5 max-w-3xl">
+
+  <!-- Page header -->
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h2 class="text-lg font-semibold mb-1">Updates</h2>
+    <p class="text-sm text-slate-400">
+      Two update streams in one place: the Soulmask game server (via
+      SteamCMD) and the manager itself (via git pull from the project
+      remote). Both can be checked + applied independently.
+    </p>
+  </div>
+
+  <!-- Flash banner -->
+  {% if flash_msg %}
+    <div class="rounded p-3 text-sm border
+                {% if flash_kind == 'ok' %}bg-emerald-900/30 border-emerald-700 text-emerald-200
+                {% elif flash_kind == 'error' %}bg-rose-900/30 border-rose-700 text-rose-200
+                {% else %}bg-slate-800 border-slate-700 text-slate-200{% endif %}">
+      {{ flash_msg }}
+    </div>
+  {% endif %}
+
+  <!-- ── Steam (game server) updates ─────────────────────────────── -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-base font-semibold">Game server (Steam)</h3>
+      {% if steam.update_available %}
+        <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-amber-700 text-amber-100">UPDATE AVAILABLE</span>
+      {% elif steam.local_buildid and steam.remote_buildid %}
+        <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-emerald-800 text-emerald-100">up to date</span>
+      {% endif %}
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-4">
+      <div>
+        <div class="text-xs text-slate-400">Installed build</div>
+        <div class="font-mono">{{ steam.local_buildid or "?" }}</div>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400">Latest on Steam</div>
+        <div class="font-mono">
+          {% if steam.remote_buildid %}{{ steam.remote_buildid }}
+          {% else %}<span class="text-slate-500 italic">(not checked yet)</span>{% endif %}
+        </div>
+        {% if steam.last_check_at_human %}
+          <div class="text-xs text-slate-500">checked {{ steam.last_check_at_human }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if steam.last_error %}
+      <div class="text-xs text-rose-300 mb-3">Last Steam check error: {{ steam.last_error }}</div>
+    {% endif %}
+
+    <div class="flex flex-wrap gap-2 items-center">
+      <form method="POST" action="{{ url_for('self_update.check_steam') }}"
+            data-busy-text="Checking Steam…">
+        <button type="submit"
+                class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600">
+          Check for Steam updates
+        </button>
+      </form>
+
+      {# Manual Update / Verify. Both call SteamCMD app_update under
+         the hood: Update without `validate` (fast manifest diff),
+         Verify with `validate` (full hash check). Both NEED the
+         install dir lockable, so they're disabled if any server is
+         running -- SteamCMD would fail mid-stream and leave the
+         install half-applied. #}
+      {% set steam_busy = server_status.any_running or server_status.op_in_progress %}
+      {% set steam_busy_reason = (
+          "An op is in progress. Wait for it to finish."
+          if server_status.op_in_progress else
+          "Stop the server(s) first -- SteamCMD can't update while "
+          "WSServer.exe holds the install dir."
+      ) %}
+      <form method="POST" action="{{ url_for('self_update.app_update') }}"
+            data-busy-text="Updating…"
+            onsubmit="return confirm('Run SteamCMD app_update (fast manifest-diff)?\n\nNo server restart will happen automatically. The activity log below shows progress.')">
+        <button type="submit"
+                {% if steam_busy %}disabled
+                  data-tip="{{ steam_busy_reason }}"
+                  class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
+                {% else %}
+                  data-tip="Run SteamCMD app_update (no validate). Servers must be stopped first."
+                  class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600"
+                {% endif %}>
+          Update
+        </button>
+      </form>
+      <form method="POST" action="{{ url_for('self_update.app_verify') }}"
+            data-busy-text="Verifying…"
+            onsubmit="return confirm('Run SteamCMD app_update with validate?\n\nThis hashes every installed file against the Steam manifest and re-downloads anything corrupted or missing. Slow but thorough -- use when you suspect install corruption. Servers must be stopped.')">
+        <button type="submit"
+                {% if steam_busy %}disabled
+                  data-tip="{{ steam_busy_reason }}"
+                  class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
+                {% else %}
+                  data-tip="Run SteamCMD app_update WITH validate (full file-hash check). Slow. Servers must be stopped first."
+                  class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600"
+                {% endif %}>
+          Verify
+        </button>
+      </form>
+
+      {% if steam.update_available and not server_status.op_in_progress %}
+        <form method="POST" action="{{ url_for('self_update.update_restart') }}"
+              class="flex items-center gap-2"
+              data-busy-text="Starting…"
+              onsubmit="return confirm('Update + Restart will: stop both servers (with ' + this.countdown_sec.value + 's in-game warning), run SteamCMD app_update (5-15 min), then start both servers in cluster order. Total: 15-45 min on a slow server. Continue?')">
+          <label class="text-xs text-slate-400">Warn:</label>
+          <select name="countdown_sec"
+                  class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs">
+            <option value="60">1 min</option>
+            <option value="180" selected>3 min</option>
+            <option value="300">5 min</option>
+            <option value="600">10 min</option>
+            <option value="900">15 min</option>
+          </select>
+          <button type="submit"
+                  class="px-3 py-1.5 rounded text-sm bg-amber-600 hover:bg-amber-500 font-medium">
+            Update + Restart
+          </button>
+        </form>
+      {% elif steam.update_available and server_status.op_in_progress %}
+        <span class="text-xs text-slate-400 italic">
+          {{ server_status.op_name|upper }} in progress -- Update + Restart available once it finishes.
+        </span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── Manager (git) updates ───────────────────────────────────── -->
+  {% if not git_resolved %}
+    <div class="bg-rose-900/30 border border-rose-700 rounded p-4 text-sm text-rose-200">
+      <strong>Git not found.</strong> Manager updates require git on
+      this machine. Run the
+      <a href="/setup/" class="underline hover:text-rose-100">Setup wizard</a>
+      &mdash; it installs PortableGit alongside SteamCMD on first run.
+    </div>
+  {% elif not status.deploy_key_present %}
+    <div class="bg-amber-900/30 border border-amber-700 rounded p-3 text-sm text-amber-200">
+      <strong>Deploy key not generated yet.</strong>
+      Set up the manager's git auth in
+      <a href="/settings/?tab=Manager+update+detection" class="underline hover:text-amber-100">Settings &rarr; Manager update detection</a>
+      before checking or applying updates.
+    </div>
+  {% endif %}
+
+  <!-- Manager apply -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-base font-semibold">Manager (git) &mdash; apply</h3>
+      {% if status.commits_behind %}
+        <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-amber-700 text-amber-100">
+          {{ status.commits_behind|length }} BEHIND
+        </span>
+      {% elif status.upstream_sha and status.current_sha == status.upstream_sha %}
+        <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-emerald-800 text-emerald-100">up to date</span>
+      {% endif %}
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-4">
+      <div>
+        <div class="text-xs text-slate-400">Current SHA</div>
+        <div class="font-mono">{{ status.current_sha[:12] if status.current_sha else "?" }}</div>
+        {% if status.current_subject %}
+          <div class="text-xs text-slate-500 truncate" title="{{ status.current_subject }}">
+            {{ status.current_subject }}
+          </div>
+        {% endif %}
+      </div>
+      <div>
+        <div class="text-xs text-slate-400">Upstream (origin/main)</div>
+        <div class="font-mono">
+          {% if status.upstream_sha %}{{ status.upstream_sha[:12] }}{% else %}<span class="text-slate-500 italic">(not fetched yet)</span>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if status.commits_behind %}
+      <div class="mb-4">
+        <div class="text-xs text-slate-400 mb-1">Pending commits:</div>
+        <div class="bg-slate-900 border border-slate-700 rounded p-2 font-mono text-xs space-y-0.5 max-h-48 overflow-y-auto">
+          {% for sha, subj in status.commits_behind %}
+            <div><span class="text-amber-400">{{ sha }}</span> &middot; {{ subj }}</div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% if status.dirty %}
+      <div class="bg-amber-900/30 border border-amber-700 rounded p-3 mb-3 text-sm text-amber-200">
+        <div class="font-medium">Working tree has uncommitted changes.</div>
+        <div class="mt-1">
+          Apply (which uses <code class="font-mono">git pull --ff-only</code>) won't merge over a
+          dirty tree. Files reported by <code class="font-mono">git status</code>:
+        </div>
+        <ul class="mt-2 text-xs font-mono bg-slate-950/50 rounded p-2 max-h-40 overflow-y-auto">
+          {% for line in status.dirty_files %}
+            <li>{{ line }}</li>
+          {% endfor %}
+        </ul>
+        <div class="text-xs mt-2">
+          On the server, inspect with <code class="font-mono">git diff</code> and either commit
+          (if you intended these edits) or revert with
+          <code class="font-mono">git checkout -- &lt;file&gt;</code>. Common cause on Windows:
+          line-ending normalisation (LF/CRLF) -- a
+          <code class="font-mono">git checkout -- .</code> from a clean shell often clears it.
+        </div>
+        <div class="mt-3 pt-3 border-t border-amber-700/50">
+          <div class="text-xs font-medium mb-2">One-click recovery (no shell access required):</div>
+          <div class="flex flex-wrap gap-2">
+            <form method="POST" action="{{ url_for('self_update.discard') }}"
+                  data-busy-text="Discarding…"
+                  onsubmit="return confirm('Discard local changes?\n\nRuns git reset --hard HEAD. Reverts every modified tracked file. Untracked files (data/, logs/, portable/, steamcmd/) are preserved.\n\nUse this when the operator hand-edited code on the server and Apply now refuses.');">
+              <button type="submit"
+                      class="px-3 py-1.5 rounded text-xs bg-amber-700 hover:bg-amber-600 font-medium">
+                Discard local changes
+              </button>
+            </form>
+            <form method="POST" action="{{ url_for('self_update.force_sync') }}"
+                  data-busy-text="Syncing…"
+                  onsubmit="return confirm('Force-sync to upstream?\n\nRuns git fetch + git reset --hard origin/main. Discards LOCAL COMMITS and uncommitted edits, snapping the working tree to whatever origin/main currently points at. Untracked files preserved. Manager restarts after.\n\nMost aggressive recovery short of re-clone -- use only when Discard is insufficient.');">
+              <button type="submit"
+                      class="px-3 py-1.5 rounded text-xs bg-rose-700 hover:bg-rose-600 font-medium">
+                Force sync to upstream
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if breaker.tripped %}
+      <div class="bg-rose-900/30 border border-rose-700 rounded p-3 mb-3 text-sm text-rose-200">
+        <div class="font-medium">&#9888; Auto-updates paused (circuit breaker tripped).</div>
+        <div class="mt-1 text-xs">
+          {{ breaker.failures_in_window }} Apply attempts have failed in the last
+          {{ breaker.window_hours }}h (threshold: {{ breaker.threshold }}).
+          The breaker is the manager's "stop trying the same broken
+          thing" guard -- it forces a human look before retrying.
+        </div>
+        {% if breaker.last_error %}
+          <div class="mt-2 text-xs">
+            <div class="text-slate-400">Last error:</div>
+            <pre class="font-mono text-xs bg-slate-950/50 rounded p-2 mt-1 whitespace-pre-wrap break-all">{{ breaker.last_error }}</pre>
+          </div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('self_update.reset_breaker') }}"
+              class="mt-3"
+              onsubmit="return confirm('Reset the circuit breaker?\n\nClears the failure counter and re-enables Apply. Only do this AFTER you have investigated the underlying failure -- otherwise the next Apply will likely fail the same way and the breaker will trip again.');">
+          <button type="submit"
+                  class="px-3 py-1.5 rounded text-xs bg-rose-700 hover:bg-rose-600 font-medium">
+            Reset breaker
+          </button>
+        </form>
+      </div>
+    {% elif breaker.failures_in_window > 0 %}
+      <div class="text-xs text-amber-300 mb-3">
+        Recent Apply failures: {{ breaker.failures_in_window }} of
+        {{ breaker.threshold }} (rolling {{ breaker.window_hours }}h
+        window). Breaker not yet tripped.
+      </div>
+    {% endif %}
+
+    <div class="flex flex-wrap gap-2">
+      <form method="POST" action="{{ url_for('self_update.check') }}"
+            data-busy-text="Checking…">
+        <button type="submit"
+                {% if not status.deploy_key_present or not git_resolved %}disabled
+                title="Need git + a deploy key first"
+                class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
+                {% else %}
+                class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600"
+                {% endif %}>
+          Check for manager updates
+        </button>
+      </form>
+      <form method="POST" action="{{ url_for('self_update.apply') }}"
+            data-busy-text="Applying…"
+            onsubmit="return confirm('Apply update?\n\nRuns git pull --ff-only origin main, then restarts the manager. Game servers, if running, are unaffected -- the manager will re-adopt them on boot. Any in-flight manager op (snapshot, start, stop) is cut off.');">
+        <button type="submit"
+                {% if not status.commits_behind or status.dirty or breaker.tripped %}disabled
+                title="{% if breaker.tripped %}Circuit breaker tripped{% elif status.dirty %}Working tree dirty{% else %}Up to date{% endif %}"
+                class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
+                {% else %}
+                class="px-3 py-1.5 rounded text-sm bg-amber-600 hover:bg-amber-500 font-medium"
+                {% endif %}>
+          Apply &amp; restart
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Live activity log ─────────────────────────────────────────── -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-base font-semibold">Activity log</h3>
+      <span id="updates-op-banner"
+            class="text-xs uppercase font-mono px-2 py-0.5 rounded
+                   bg-slate-700 text-slate-300">idle</span>
+    </div>
+    <p class="text-xs text-slate-400 mb-3">
+      Live output from manager and Steam update operations. Lines
+      stream as they happen -- the page is not polled. Apply, Check,
+      Force-sync, Discard, Test connection and Steam check all land
+      here.
+    </p>
+    <pre id="updates-log"
+         class="bg-slate-950 border border-slate-700 rounded p-3
+                font-mono text-xs leading-tight overflow-y-auto
+                whitespace-pre-wrap break-all"
+         style="height: 22rem;"
+    ><span class="text-slate-500">(connecting...)</span></pre>
+  </div>
+
+</div>
+
+{# Loading-state wiring lives in base.html (delegated). Just mark
+   each form with data-busy-text="..." and the submit handler does
+   the rest. #}
+
+<script>
+(function () {
+  const logEl = document.getElementById("updates-log");
+  const banner = document.getElementById("updates-op-banner");
+  if (!logEl || !banner) return;
+
+  // Auto-scroll only if the user is already pinned to the bottom -- if
+  // they have scrolled up to read older output, don't yank them back.
+  function isAtBottom() {
+    return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 32;
+  }
+
+  let placeholderCleared = false;
+  function appendLine(seq, ts, source, line) {
+    if (!placeholderCleared) {
+      logEl.innerHTML = "";
+      placeholderCleared = true;
+    }
+    const span = document.createElement("span");
+    // Color by source: manager=cyan, steam=amber, anything else=slate.
+    let cls = "text-slate-200";
+    if (source === "manager") cls = "text-cyan-300";
+    else if (source === "steam") cls = "text-amber-300";
+    span.className = cls;
+    // Prefix each line with HH:MM:SS local-time so the operator can
+    // correlate with manager.log without a wall clock.
+    const d = new Date(ts * 1000);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    span.textContent = `${hh}:${mm}:${ss} [${source}] ${line}\n`;
+    const stick = isAtBottom();
+    logEl.appendChild(span);
+    if (stick) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setBanner(state) {
+    const phase = state.phase || "idle";
+    const name = state.name || "";
+    if (phase === "running") {
+      banner.textContent = `running: ${name}`;
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-amber-700 text-amber-100";
+    } else if (phase === "done") {
+      banner.textContent = `done: ${name}`;
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-emerald-800 text-emerald-100";
+    } else if (phase === "failed") {
+      banner.textContent = `failed: ${name}`;
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-rose-800 text-rose-100";
+    } else {
+      banner.textContent = "idle";
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-slate-700 text-slate-300";
+    }
+  }
+
+  const es = new EventSource("/updates/sse");
+  // Track op-phase so we can reload the page when an op finishes --
+  // the static status panel above the activity log (current SHA,
+  // commits-behind badge, Steam build-id, breaker banner) is rendered
+  // server-side at page load and won't update otherwise. Backfill of
+  // the activity log on reconnect comes from updates_log.snapshot.
+  let lastPhase = null;
+  let reloadTimer = null;
+  es.addEventListener("line", function (e) {
+    try {
+      const o = JSON.parse(e.data);
+      appendLine(o.seq, o.ts, o.source, o.line);
+    } catch (err) { /* ignore malformed frame */ }
+  });
+  // Ops whose success path schedules a manager restart (~1.5s after
+  // phase=done). For these we MUST navigate to /settings/restarting --
+  // a plain location.reload() would race the os._exit and land on a
+  // browser error page until the launcher relaunches the manager.
+  // The /settings/restarting page actively probes /updates and
+  // navigates as soon as it's reachable again.
+  const restartingOps = new Set([
+    "Apply manager update",
+    "Force-sync to upstream",
+  ]);
+
+  es.addEventListener("op", function (e) {
+    let s;
+    try { s = JSON.parse(e.data); } catch (err) { return; }
+    setBanner(s);
+    if (lastPhase === "running"
+        && (s.phase === "done" || s.phase === "failed")
+        && reloadTimer === null) {
+      const willRestart = (s.phase === "done" && restartingOps.has(s.name));
+      reloadTimer = setTimeout(function () {
+        es.close();
+        if (willRestart) {
+          // Operator stays on /updates after the manager comes back.
+          window.location.href =
+            "/settings/restarting?to=" + encodeURIComponent("/updates/");
+        } else {
+          // Non-restart op: just reload the page so the static status
+          // panel (commits-behind, build-id, etc.) re-renders with
+          // fresh server-side state.
+          location.reload();
+        }
+      }, 800);
+    }
+    lastPhase = s.phase;
+  });
+  es.onerror = function () {
+    // EventSource auto-reconnects with the retry: 5000 hint from the
+    // server. Don't replace the buffer on a transient drop.
+  };
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Restarting Manager · Soulmask Manager{% endblock %}
+{% block content %}
+
+<div class="bg-slate-800 rounded-lg p-6 border border-slate-700 max-w-xl">
+  <h2 class="text-lg font-semibold mb-2 text-amber-300">
+    <span id="spinner" class="inline-block">&#9881;</span>
+    Manager is restarting<span id="dots">&hellip;</span>
+  </h2>
+  <p class="text-sm text-slate-300 mb-2">
+    The manager process is exiting and the launcher will spawn a fresh one
+    automatically. Game servers (if running) keep going independently and
+    will be re-adopted on the next dashboard load.
+  </p>
+  <p id="status-line" class="text-sm text-slate-300 mb-4">
+    Probing the manager every second &mdash; this page will redirect
+    automatically as soon as the new process is up.
+  </p>
+  <p class="text-xs text-slate-500 mb-4">
+    Waited <span id="elapsed" class="font-mono">0</span>s &middot;
+    Next probe in <span id="countdown" class="font-mono">1</span>s
+  </p>
+  <div class="flex gap-3">
+    <a href="{{ to or '/' }}" id="reload-now"
+       class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+      Reload now
+    </a>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Active-probe: hit the redirect target every second. As soon as it
+  // returns 200, navigate. This recovers as fast as the manager comes
+  // back up, instead of blindly waiting a fixed countdown that's
+  // either too short (browser shows error) or too long (annoying).
+  const target = {{ (to or '/') | tojson }};
+  const dots = document.getElementById('dots');
+  const elapsed = document.getElementById('elapsed');
+  const countdown = document.getElementById('countdown');
+  const statusLine = document.getElementById('status-line');
+  let attempts = 0;
+  let waited = 0;
+  let nextIn = 2;  // give the dying manager a 2s head start
+
+  // Animate the dots so the user can see the page is alive even when
+  // the network probe is failing.
+  setInterval(() => {
+    const n = ((Date.now() / 400) | 0) % 4;
+    dots.textContent = '.'.repeat(n) || ' ';
+  }, 400);
+
+  // Tick the elapsed / countdown displays once a second.
+  setInterval(() => {
+    waited += 1;
+    elapsed.textContent = waited;
+    nextIn = Math.max(0, nextIn - 1);
+    countdown.textContent = nextIn;
+  }, 1000);
+
+  function probe() {
+    attempts += 1;
+    fetch(target, { cache: 'no-store', credentials: 'same-origin' })
+      .then(r => {
+        if (r.ok) {
+          // Manager is back. Navigate so the operator sees fresh state.
+          window.location.href = target;
+        } else {
+          throw new Error('not yet (HTTP ' + r.status + ')');
+        }
+      })
+      .catch(err => {
+        // Connection refused / 502 / etc. Try again shortly.
+        nextIn = 1;
+        if (attempts > 30) {
+          statusLine.innerHTML =
+            'Still waiting after ' + waited + 's. The manager may have ' +
+            'crash-looped &mdash; check the server\'s console or ' +
+            '<code>logs/manager.log</code>. ' +
+            '<a href="' + target + '" class="underline text-emerald-300">' +
+            'Try anyway</a>.';
+        }
+        setTimeout(probe, 1000);
+      });
+  }
+
+  // Initial delay so the manager has time to actually exit before we
+  // probe (otherwise the first probe can hit the dying process and
+  // spuriously succeed).
+  setTimeout(probe, nextIn * 1000);
+})();
+</script>
+
+{% endblock %}

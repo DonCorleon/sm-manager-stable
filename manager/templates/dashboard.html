@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Soulmask Manager{% endblock %}
+{% block content %}
+
+{% if not setup_complete %}
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h2 class="text-lg font-semibold mb-2">First-run setup needed</h2>
+    <p class="text-slate-300 mb-4">
+      The manager is running but isn't yet configured. Run the setup wizard to install
+      SteamCMD, the Soulmask dedicated server, and generate the start scripts.
+    </p>
+    <a href="/setup/"
+       class="inline-block bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+      Run setup &rarr;
+    </a>
+  </div>
+{% else %}
+  {# Live status via SSE. Server pushes a freshly-rendered partial on
+     every refresh tick AND on rare events (start/stop, lock toggle,
+     backup op begin/end). One persistent connection per open tab;
+     replaces the 5-sec polling we had previously. #}
+  <div id="status-panel"
+       hx-ext="sse"
+       sse-connect="/api/server/status/stream"
+       sse-swap="status">
+    {% include "_dashboard_status.html" %}
+  </div>
+
+  <script>
+    // Pause the SSE swap while the user is interacting with a form
+    // control inside the panel. Without this, an incoming push throws
+    // away any dropdown selection in flight (and closes open dropdowns).
+    // hx-preserve is set on the dropdowns as a backup; pausing on focus
+    // is the robust mechanism.
+    (function () {
+      var POLL_TARGET_ID = "status-panel";
+      var RESUME_DELAY_MS = 250;     // small grace so click on submit lands
+
+      function isFormField(el) {
+        if (!el || !el.tagName) return false;
+        var t = el.tagName;
+        return t === "SELECT" || t === "INPUT" || t === "TEXTAREA";
+      }
+
+      document.addEventListener("focusin", function (e) {
+        if (isFormField(e.target)) {
+          document.body.classList.add("paused-polling");
+        }
+      });
+      document.addEventListener("focusout", function (e) {
+        if (isFormField(e.target)) {
+          // Slight delay so a button click (which moves focus off the
+          // select) submits the form before swaps resume.
+          setTimeout(function () {
+            document.body.classList.remove("paused-polling");
+          }, RESUME_DELAY_MS);
+        }
+      });
+
+      // For SSE, the right hook is htmx:beforeSwap on the panel element.
+      // preventDefault() drops just this frame; the next push (~5s or
+      // sooner on a notify) will swap normally once the user defocuses.
+      document.body.addEventListener("htmx:beforeSwap", function (evt) {
+        if (evt.detail.target && evt.detail.target.id === POLL_TARGET_ID
+            && document.body.classList.contains("paused-polling")) {
+          evt.preventDefault();
+        }
+      });
+    })();
+  </script>
+{% endif %}
+
+{% endblock %}

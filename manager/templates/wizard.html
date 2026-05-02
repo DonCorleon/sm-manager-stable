@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block title %}Setup wizard · Soulmask Manager{% endblock %}
+
+{% macro map_fields(prefix, instance) %}
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+    <div class="sm:col-span-3">
+      <label class="block text-xs font-medium text-slate-300 mb-1">
+        Server name <span class="text-rose-400">*</span>
+      </label>
+      <input type="text" name="{{ prefix }}_name"
+             value="{{ instance.name }}"
+             placeholder="e.g. Don's CloudMist"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm focus:border-emerald-500 focus:outline-none">
+      <p class="text-xs text-slate-500 mt-1">
+        Appears in the Steam server browser. Effectively immutable -- renaming later can break saves.
+      </p>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-300 mb-1">Game port</label>
+      <input type="number" name="{{ prefix }}_game_port"
+             value="{{ instance.game_port }}"
+             min="1" max="65535"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm font-mono">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-300 mb-1">Query port</label>
+      <input type="number" name="{{ prefix }}_query_port"
+             value="{{ instance.query_port }}"
+             min="1" max="65535"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm font-mono">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-300 mb-1">EchoPort (admin)</label>
+      <input type="number" name="{{ prefix }}_echo_port"
+             value="{{ instance.echo_port }}"
+             min="1" max="65535"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm font-mono">
+    </div>
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="bg-slate-800 rounded-lg p-6 border border-slate-700 max-w-3xl">
+  <h2 class="text-lg font-semibold mb-1">Setup wizard</h2>
+  <p class="text-sm text-slate-400 mb-5">
+    Fill in the basics. The next page previews exactly what the manager will do --
+    nothing is installed or written until you confirm there.
+  </p>
+
+  {% if errors %}
+  <div class="bg-rose-900/30 border border-rose-700 rounded p-3 mb-5">
+    <div class="text-rose-300 font-medium mb-1">Please fix:</div>
+    <ul class="list-disc list-inside text-sm text-rose-200 space-y-1">
+      {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="POST" class="space-y-6">
+
+    <!-- Mode -->
+    <fieldset>
+      <legend class="text-sm font-medium text-slate-200 mb-2">Mode</legend>
+      <div class="flex gap-6">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="mode" value="single"
+                 {% if config.mode == 'single' %}checked{% endif %}
+                 onchange="updateUI()">
+          <span>Single map</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="mode" value="cluster"
+                 {% if config.mode == 'cluster' %}checked{% endif %}
+                 onchange="updateUI()">
+          <span>Cluster (both maps, linked)</span>
+        </label>
+      </div>
+      <p class="text-xs text-slate-500 mt-2">
+        Cluster runs both maps as linked instances -- characters can transfer between them.
+        Two server processes; main starts first.
+      </p>
+    </fieldset>
+
+    <!-- Map selectors -->
+    <fieldset>
+      <!-- Single mode: which map -->
+      <div id="single-map-row">
+        <label class="block text-sm font-medium text-slate-200 mb-1">Map</label>
+        <select name="single_map" onchange="updateUI()"
+                class="bg-slate-900 border border-slate-700 rounded px-3 py-2 w-full">
+          {% for value, label in maps.items() %}
+          <option value="{{ value }}"
+                  {% if config.mode == 'single' and config.main_map == value %}selected{% elif config.mode != 'single' and value == 'Level01_Main' %}selected{% endif %}>
+            {{ label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Cluster mode: main map (other becomes child) -->
+      <div id="cluster-main-row">
+        <label class="block text-sm font-medium text-slate-200 mb-1">
+          Main map <span class="text-slate-500 text-xs">(the other becomes child)</span>
+        </label>
+        <select name="cluster_main_map" onchange="updateUI()"
+                class="bg-slate-900 border border-slate-700 rounded px-3 py-2 w-full">
+          {% for value, label in maps.items() %}
+          <option value="{{ value }}"
+                  {% if config.mode == 'cluster' and config.main_map == value %}selected{% endif %}>
+            {{ label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </fieldset>
+
+    <!-- Cloud Mist Forest section -->
+    <fieldset id="cm-section" class="border border-slate-700 rounded p-4">
+      <legend class="text-sm font-medium px-2">
+        <span class="text-emerald-300">Cloud Mist Forest</span>
+        <span id="cm-badge"
+              class="ml-2 text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono"></span>
+      </legend>
+      {{ map_fields("cm", config.for_map("Level01_Main")) }}
+    </fieldset>
+
+    <!-- Shifting Sands section -->
+    <fieldset id="ss-section" class="border border-slate-700 rounded p-4">
+      <legend class="text-sm font-medium px-2">
+        <span class="text-amber-300">Shifting Sands</span>
+        <span id="ss-badge"
+              class="ml-2 text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono"></span>
+      </legend>
+      {{ map_fields("ss", config.for_map("DLC_Level01_Main")) }}
+    </fieldset>
+
+    <!-- Cluster main server port -->
+    <fieldset id="mainserverport-section">
+      <label class="block text-sm font-medium text-slate-200 mb-1">
+        Cluster link port (<code class="text-xs text-slate-400">-mainserverport</code>)
+      </label>
+      <input type="number" name="mainserverport"
+             value="{{ config.mainserverport }}"
+             min="1" max="65535"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-32 text-sm font-mono">
+      <p class="text-xs text-slate-500 mt-1">
+        TCP port the child node uses to connect to main.
+        <strong class="text-amber-300">Loopback only</strong> -- never forward this on your router.
+      </p>
+    </fieldset>
+
+    <!-- Shared: max players -->
+    <fieldset>
+      <label class="block text-sm font-medium text-slate-200 mb-1">
+        Max players <span class="text-slate-500 text-xs">(applied to both servers)</span>
+      </label>
+      <input type="number" name="max_players"
+             value="{{ config.max_players }}"
+             min="1" max="999"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-32 text-sm">
+    </fieldset>
+
+    <!-- Authentication -->
+    <fieldset class="border border-slate-700 rounded p-4">
+      <legend class="text-sm font-medium text-slate-200 px-2">Authentication</legend>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">
+            Admin password <span class="text-rose-400">*</span>
+          </label>
+          <input type="text" name="admin_password"
+                 value="{{ config.admin_password }}"
+                 class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm font-mono">
+          <p class="text-xs text-slate-500 mt-1">For the in-game GM panel. No spaces or quotes.</p>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">
+            Join password <span class="text-slate-500">(optional)</span>
+          </label>
+          <input type="text" name="join_password"
+                 value="{{ config.join_password }}"
+                 class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm font-mono">
+          <p class="text-xs text-slate-500 mt-1">Empty = open server, anyone can join.</p>
+        </div>
+      </div>
+    </fieldset>
+
+    <!-- Game mode -->
+    <fieldset>
+      <legend class="text-sm font-medium text-slate-200 mb-2">Game mode</legend>
+      <div class="flex gap-6">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="game_mode" value="pve"
+                 {% if config.game_mode == 'pve' %}checked{% endif %}>
+          <span>PvE (cooperative)</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="game_mode" value="pvp"
+                 {% if config.game_mode == 'pvp' %}checked{% endif %}>
+          <span>PvP</span>
+        </label>
+      </div>
+    </fieldset>
+
+    <!-- Template -->
+    <fieldset>
+      <label class="block text-sm font-medium text-slate-200 mb-1">
+        Gameplay tuning preset
+      </label>
+      <select name="gameplay_template"
+              class="bg-slate-900 border border-slate-700 rounded px-3 py-2 w-full">
+        {% for value, label in templates %}
+        <option value="{{ value }}" {% if value == config.gameplay_template %}selected{% endif %}>
+          {{ label }}
+        </option>
+        {% endfor %}
+      </select>
+      <p class="text-xs text-slate-500 mt-1">
+        Sets initial multipliers (drop rates, XP, crafting times, animal stats, etc.).
+        The game ships ~90 of these; this is the curated short list. Tune individual values later via the config editor.
+      </p>
+    </fieldset>
+
+    <div class="flex justify-end gap-3 pt-4 border-t border-slate-700">
+      <a href="/setup/" class="px-4 py-2 text-sm text-slate-300 hover:text-white">Back</a>
+      <button type="submit"
+              class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+        Save &amp; Preview &rarr;
+      </button>
+    </div>
+  </form>
+
+  <script>
+    function updateUI() {
+      const mode = document.querySelector('input[name=mode]:checked').value;
+      const isCluster = mode === 'cluster';
+      const singleMap = document.querySelector('select[name=single_map]').value;
+      const mainMap = document.querySelector('select[name=cluster_main_map]').value;
+
+      // Map selectors visibility
+      document.getElementById('single-map-row').hidden = isCluster;
+      document.getElementById('cluster-main-row').hidden = !isCluster;
+      document.getElementById('mainserverport-section').hidden = !isCluster;
+
+      // Per-map sections + badges
+      const cm = document.getElementById('cm-section');
+      const ss = document.getElementById('ss-section');
+      const cmBadge = document.getElementById('cm-badge');
+      const ssBadge = document.getElementById('ss-badge');
+
+      function setBadge(el, text, role) {
+        el.textContent = text;
+        el.className = 'ml-2 text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono';
+        if (role === 'main') el.classList.add('bg-emerald-700', 'text-emerald-100');
+        else if (role === 'child') el.classList.add('bg-blue-700', 'text-blue-100');
+        else if (role === 'single') el.classList.add('bg-slate-700', 'text-slate-200');
+      }
+
+      if (isCluster) {
+        cm.hidden = false;
+        ss.hidden = false;
+        if (mainMap === 'Level01_Main') {
+          setBadge(cmBadge, 'main', 'main');
+          setBadge(ssBadge, 'child', 'child');
+        } else {
+          setBadge(cmBadge, 'child', 'child');
+          setBadge(ssBadge, 'main', 'main');
+        }
+      } else {
+        // Single mode: hide unselected map; mark selected as 'active'.
+        cm.hidden = singleMap !== 'Level01_Main';
+        ss.hidden = singleMap !== 'DLC_Level01_Main';
+        setBadge(cmBadge, singleMap === 'Level01_Main' ? 'active' : '', 'single');
+        setBadge(ssBadge, singleMap === 'DLC_Level01_Main' ? 'active' : '', 'single');
+      }
+    }
+    updateUI();
+  </script>
+</div>
+{% endblock %}

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Restore {{ ts }} · Soulmask Manager{% endblock %}
+{% block content %}
+
+<div class="bg-slate-800 rounded-lg p-6 border border-slate-700 mb-4">
+  <h2 class="text-lg font-semibold mb-1">Restore snapshot</h2>
+  <div class="text-sm text-slate-400 mb-4">
+    Snapshot <code class="font-mono">{{ ts }}</code>
+    {% if snap_build %}
+      &middot; build <code class="font-mono">{{ snap_build }}</code>
+    {% endif %}
+  </div>
+
+  {% if cross_build_warning %}
+  <div class="bg-amber-900/30 border border-amber-700 rounded p-3 mb-4 text-sm text-amber-200">
+    <strong>Cross-build warning.</strong>
+    This snapshot is from build <code class="font-mono">{{ snap_build }}</code>;
+    the server is currently running build <code class="font-mono">{{ current_build or 'unknown' }}</code>.
+    Soulmask is generally good at migrating its own DBs across versions, but the operator
+    has occasionally seen schema drift. Restore may fail or produce a corrupt world.
+    Consider backing up the current world first (Backup now on the dashboard).
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('backups.restore', ts=ts) }}"
+        onsubmit="return confirm('Restore selected instances?\n\nThe manager will: (1) take a fresh pre-restore snapshot of every selected instance (live `bk` if running, cold copy if stopped) -- this is your one-click rollback if you change your mind, (2) stop only the instances that are currently running, (3) decompress the chosen snapshot to a staging file and integrity-check it BEFORE replacing world.db, (4) restart only the instances that were running before. Servers that were stopped going in stay stopped.\n\nContinue?');">
+
+    <fieldset class="mb-4">
+      <legend class="text-sm font-medium text-slate-300 mb-2">
+        Which instance(s) to restore
+      </legend>
+      <div class="space-y-2">
+        {% for leg in legs %}
+          <label class="flex items-start gap-3 p-2 rounded hover:bg-slate-700/30">
+            <input type="checkbox" name="instances" value="{{ leg.instance }}"
+                   {% if leg.file %}checked{% else %}disabled{% endif %}
+                   class="mt-1">
+            <div class="text-sm flex-1">
+              <div class="font-mono">{{ leg.instance }}</div>
+              <div class="text-xs text-slate-400 mt-0.5">
+                {% if leg.file %}
+                  {{ leg.size_bytes }} bytes &middot;
+                  integrity {{ leg.integrity }} &middot;
+                  source {{ leg.source }}
+                {% else %}
+                  <span class="text-rose-400">leg failed -- no file to restore from</span>
+                {% endif %}
+              </div>
+            </div>
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    {% if has_config_bundle %}
+    <fieldset class="mb-4">
+      <legend class="text-sm font-medium text-slate-300 mb-2">
+        Manager configuration
+      </legend>
+      <label class="flex items-start gap-3 p-2 rounded hover:bg-slate-700/30">
+        <input type="checkbox" name="include_manager_config" class="mt-1">
+        <div class="text-sm flex-1">
+          <div>Also restore manager config (settings.toml + GameXishu + Engine.ini)</div>
+          <div class="text-xs text-slate-400 mt-0.5">
+            Off by default -- usually you only want to restore world data.
+            If on, your current settings.toml is saved as
+            <code class="font-mono">settings.toml.before-restore</code>
+            so you can manually merge any hand-edits afterwards.
+          </div>
+        </div>
+      </label>
+    </fieldset>
+    {% endif %}
+
+    <div class="flex items-center justify-end gap-2">
+      <a href="{{ url_for('backups.index') }}"
+         class="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600">
+        Cancel
+      </a>
+      <button type="submit"
+              class="px-4 py-2 rounded text-sm font-medium bg-rose-600 hover:bg-rose-500">
+        Restore
+      </button>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

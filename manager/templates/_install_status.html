@@ -1,0 +1,87 @@
+{# HTMX partial: rendered standalone for polling, also included in install.html on first load. #}
+
+<div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+  <div class="flex items-baseline justify-between mb-3">
+    <div>
+      <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                   {% if state.status == 'running' %}bg-amber-700 text-amber-100
+                   {% elif state.status == 'completed' %}bg-emerald-700 text-emerald-100
+                   {% elif state.status == 'failed' %}bg-rose-700 text-rose-100
+                   {% else %}bg-slate-700 text-slate-200{% endif %}">
+        {{ state.status }}
+      </span>
+      <span class="ml-3 text-base font-medium">
+        {{ state.step or "(not started)" }}
+      </span>
+    </div>
+    {% if state.status == 'running' %}
+      <span class="text-sm text-slate-400">Elapsed: {{ state.elapsed_seconds }}s</span>
+    {% elif state.status == 'completed' %}
+      <span class="text-sm text-emerald-400">Done in {{ state.elapsed_seconds }}s</span>
+    {% elif state.status == 'failed' %}
+      <span class="text-sm text-rose-400">Failed after {{ state.elapsed_seconds }}s</span>
+    {% endif %}
+  </div>
+
+  {% if state.error %}
+  <div class="bg-rose-900/30 border border-rose-700 rounded p-3 mb-4 text-sm text-rose-200">
+    <div class="font-medium mb-1">Error</div>
+    <div class="font-mono text-xs">{{ state.error }}</div>
+  </div>
+  {% endif %}
+
+  <div class="flex items-center gap-3 mb-3">
+    {% if state.status == 'idle' %}
+      <form method="POST" action="/setup/install">
+        <button type="submit"
+                class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+          Start install
+        </button>
+      </form>
+      <span class="text-xs text-slate-500">Nothing has been downloaded yet.</span>
+    {% elif state.status == 'running' %}
+      <span class="text-xs text-slate-500 italic">
+        Streaming output below (last {{ state.line_count }} lines, max 2000 retained).
+      </span>
+    {% elif state.status == 'completed' %}
+      <a href="/" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+        Continue to dashboard &rarr;
+      </a>
+      <form method="POST" action="/setup/install" class="inline">
+        <button type="submit"
+                class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-sm">
+          Re-run (verify / update)
+        </button>
+      </form>
+    {% elif state.status == 'failed' %}
+      <form method="POST" action="/setup/install">
+        <button type="submit"
+                class="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded text-sm font-medium">
+          Retry
+        </button>
+      </form>
+      <a href="/setup/preview" class="text-sm text-slate-400 hover:text-white">
+        Back to preview
+      </a>
+    {% endif %}
+  </div>
+
+  {% if state.lines %}
+  <pre id="output-pre"
+       class="bg-slate-950 border border-slate-700 rounded p-3 text-xs font-mono
+              max-h-[28rem] overflow-y-auto whitespace-pre-wrap break-all"
+  >{% for ts, line in state.lines %}<span class="text-slate-600">{{ ts }}</span>  {{ line }}
+{% endfor %}</pre>
+  <script>
+    // Auto-scroll to bottom when polling refreshes content.
+    (function() {
+      var el = document.getElementById('output-pre');
+      if (el) el.scrollTop = el.scrollHeight;
+    })();
+  </script>
+  {% else %}
+  <div class="text-sm text-slate-500 italic py-6 text-center border border-dashed border-slate-700 rounded">
+    No output yet.
+  </div>
+  {% endif %}
+</div>

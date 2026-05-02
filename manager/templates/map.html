@@ -1,0 +1,437 @@
+{% extends "base.html" %}
+{% block title %}Map · Soulmask Manager{% endblock %}
+{% block content %}
+
+{# Leaflet from CDN (already included in base.html for the dashboard
+   if needed, but include directly here too in case base.html doesn't
+   have it -- map page is the only consumer right now). #}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+  #sm-map { height: 75vh; background: #0a0a0a; }
+  .map-sidebar { max-height: 75vh; overflow-y: auto; }
+  .map-sidebar label { display: flex; align-items: center; gap: 6px;
+                        cursor: pointer; padding: 2px 0; font-size: 12px; }
+  .map-sidebar label:hover { color: #6ee7b7; }
+  .map-sidebar input[type=checkbox] { margin: 0; }
+  .map-poi-marker {
+      background: rgba(255, 51, 51, 0.85);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      width: 12px; height: 12px;
+      box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  }
+  .map-poi-icon {
+      /* Bare game icon, no circle/background/border. A subtle drop
+         shadow keeps the icon visible against light tile patches. */
+      width: 24px; height: 24px;
+      object-fit: contain;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
+  }
+  .map-cat-details > summary {
+      cursor: pointer;
+      padding: 4px 2px;
+      font-size: 12px;
+      color: #cbd5e1;
+      list-style: none;
+      user-select: none;
+  }
+  .map-cat-details > summary::-webkit-details-marker { display: none; }
+  .map-cat-details > summary::before {
+      content: "▸ ";
+      color: #6ee7b7;
+      display: inline-block;
+      transition: transform 0.15s;
+      width: 12px;
+  }
+  .map-cat-details[open] > summary::before { content: "▾ "; }
+  .map-cat-details > summary:hover { color: #6ee7b7; }
+  .map-cat-types { padding-left: 18px; padding-bottom: 4px; }
+  .map-poi-popup b { color: #6ee7b7; }
+  .map-player-marker {
+      background: #6ee7b7;
+      border: 2px solid #064e3b;
+      border-radius: 50%;
+      width: 18px; height: 18px;
+      color: #064e3b;
+      font-size: 11px; font-weight: bold;
+      text-align: center;
+      line-height: 14px;
+      box-shadow: 0 0 8px rgba(110, 231, 183, 0.8);
+      position: relative;
+  }
+  .map-player-marker.fading { opacity: 0.4; transition: opacity 1s; }
+  .map-tab-active { border-bottom: 2px solid #6ee7b7; color: #fff; }
+</style>
+
+<div class="space-y-3">
+  <div class="flex items-center justify-between">
+    <h2 class="text-lg font-semibold">World map</h2>
+    <div class="flex gap-2 text-sm" id="level-tabs">
+      {% for level in levels %}
+      <button data-level="{{ level }}"
+              class="map-tab px-3 py-1.5 rounded
+                     {% if level == main_level %}bg-emerald-700 text-white{% else %}bg-slate-700 hover:bg-slate-600 text-slate-200{% endif %}">
+        {{ level_labels[level] }}
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-3">
+    <!-- Sidebar: POI category checkboxes -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700 map-sidebar"
+         id="poi-sidebar">
+      <p class="text-xs text-slate-400 mb-2">Loading categories...</p>
+    </div>
+
+    <!-- Map -->
+    <div class="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
+      <div id="sm-map"></div>
+    </div>
+  </div>
+
+  <p class="text-xs text-slate-500">
+    Tiles + POIs from <code>data/world.sqlite</code>. Coord transform:
+    1 px = 50 UE units at zoom 6, world centre at pixel (8160, 8160).
+  </p>
+</div>
+
+<script>
+(function () {
+  // ── Constants from the verified UE -> tile-pixel transform ──
+  // (memory/coordinate_transform.md). 1 px = 50 UE units at zoom 6;
+  // world centre at zoom-6 pixel (8160, 8160). Tile pyramid is
+  // 6 levels deep; zoom 6 covers the world in 64x64 tiles of 255px.
+  const UE_PER_PX_AT_Z6 = 50.0;
+  const WORLD_CENTRE_PX = 8160.0;
+  const TILE_SIZE = 255;
+  const MIN_ZOOM = 1, MAX_ZOOM = 6;
+
+  // Leaflet's CRS.Simple multiplies latLng coords by 2^zoom when
+  // turning them into tile coords. Our calibration gives zoom-6
+  // pixels, so we divide them back to "zoom-0" units (one tile per
+  // world). At any rendered zoom z, Leaflet then scales them up by
+  // 2^z and lands inside the 2^z x 2^z tile grid we ship on disk.
+  // Without this the map asks for tiles like (127, 131) at z=2 --
+  // which produces a flood of 404s and a blank map.
+  const ZOOM_SCALE = Math.pow(2, MAX_ZOOM);
+
+  // Convert UE world (x, y) to Leaflet (lat, lng) in zoom-0 pixel
+  // units. We use a custom CRS where (lat, lng) = (pixel_y, pixel_x)
+  // directly -- no flip on either axis -- so UE's "y grows south"
+  // matches Leaflet's visual "down".
+  function ueToLatLng(ue_x, ue_y) {
+    const px_x = (ue_x / UE_PER_PX_AT_Z6 + WORLD_CENTRE_PX) / ZOOM_SCALE;
+    const px_y = (ue_y / UE_PER_PX_AT_Z6 + WORLD_CENTRE_PX) / ZOOM_SCALE;
+    return L.latLng(px_y, px_x);
+  }
+
+  // ── Custom CRS: pixel_y = lat, pixel_x = lng, no flip ──
+  const mapCRS = L.extend({}, L.CRS.Simple, {
+    transformation: new L.Transformation(1, 0, 1, 0),
+  });
+
+  // ── Initial level ──
+  const initialLevel = {{ main_level | tojson }};
+  let currentLevel = initialLevel;
+
+  // ── Build the map ──
+  const map = L.map('sm-map', {
+    crs: mapCRS,
+    minZoom: MIN_ZOOM,
+    maxZoom: MAX_ZOOM,
+    zoomControl: true,
+    attributionControl: false,
+  });
+
+  let tileLayer = null;
+  function setTileLayer(level) {
+    if (tileLayer) map.removeLayer(tileLayer);
+    tileLayer = L.tileLayer(
+      `/map/tiles/${encodeURIComponent(level)}/{z}/{x}/{y}.png`,
+      {
+        tileSize: TILE_SIZE,
+        minZoom: MIN_ZOOM,
+        maxZoom: MAX_ZOOM,
+        // Bounds are in latLng (= zoom-0 pixel) units. The world is
+        // exactly TILE_SIZE units across at zoom 0; Leaflet expands
+        // this to a TILE_SIZE * 2^z grid at each rendered zoom.
+        bounds: [[0, 0], [TILE_SIZE, TILE_SIZE]],
+        noWrap: true,
+      }
+    );
+    tileLayer.addTo(map);
+  }
+
+  // ── POI layer per category ──
+  // Map of "type name" -> L.layerGroup(). Created lazily as the
+  // operator clicks each category's checkbox.
+  const poiLayers = new Map();
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function makePoiIcon(poi) {
+    // Prefer the real per-POI icon from world.sqlite (served by
+    // /map/api/icon/<name>). Fall back to the generic red dot when
+    // no icon name is set or the asset 404s.
+    if (poi.icon) {
+      const url = `/map/api/icon/${encodeURIComponent(poi.icon)}`;
+      return L.divIcon({
+        className: '',
+        html: `<img class="map-poi-icon" src="${url}" alt="" ` +
+              `onerror="this.outerHTML='<div class=\\'map-poi-marker\\'></div>'">`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      });
+    }
+    return L.divIcon({
+      className: '',
+      html: '<div class="map-poi-marker"></div>',
+      iconSize: [12, 12],
+      iconAnchor: [6, 6],
+    });
+  }
+
+  function plotPoiList(typeName, pois) {
+    const group = L.layerGroup();
+    for (const poi of pois) {
+      const m = L.marker(ueToLatLng(poi.x, poi.y), {
+        icon: makePoiIcon(poi),
+      });
+      const label = poi.title || poi.name || poi.type || '';
+      const region = poi.region || '';
+      m.bindPopup(
+        `<div class="map-poi-popup">` +
+        `<b>${escapeHtml(label)}</b><br>` +
+        `<span style="font-size:11px;color:#9ca3af">${escapeHtml(poi.type)}</span>` +
+        (region ? `<br><span style="font-size:11px">in ${escapeHtml(region)}</span>` : '') +
+        `<br><span style="font-size:10px;color:#6b7280">UE (${poi.x|0}, ${poi.y|0})</span>` +
+        `</div>`
+      );
+      group.addLayer(m);
+    }
+    poiLayers.set(typeName, group);
+    group.addTo(map);
+  }
+
+  function fetchAndPlotCategory(typeName) {
+    const url = `/map/api/pois/${encodeURIComponent(currentLevel)}` +
+                `?type=${encodeURIComponent(typeName)}`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => plotPoiList(typeName, data.pois))
+      .catch(err => console.warn('POI fetch failed', typeName, err));
+  }
+
+  function toggleCategory(typeName, checked) {
+    const existing = poiLayers.get(typeName);
+    if (checked) {
+      if (existing) {
+        existing.addTo(map);
+      } else {
+        fetchAndPlotCategory(typeName);
+      }
+    } else if (existing) {
+      map.removeLayer(existing);
+    }
+  }
+
+  function clearAllPois() {
+    for (const grp of poiLayers.values()) {
+      map.removeLayer(grp);
+    }
+    poiLayers.clear();
+  }
+
+  // ── Sidebar: load categorised POI types for current level ──
+  // /map/api/types returns {categories: [{name, types: [{type, count, icon}]}]}
+  // -- we render one collapsed <details> per category, alphabetical
+  // within. Operator preference: collapsed by default so the sidebar
+  // doesn't dump 145 items on first load.
+  const sidebar = document.getElementById('poi-sidebar');
+  function loadCategories(level) {
+    sidebar.innerHTML = '<p class="text-xs text-slate-400 mb-2">Loading...</p>';
+    fetch(`/map/api/types/${encodeURIComponent(level)}`)
+      .then(r => r.json())
+      .then(payload => {
+        const cats = (payload && payload.categories) || [];
+        sidebar.innerHTML = '';
+        const totalTypes = cats.reduce((n, c) => n + c.types.length, 0);
+        const totalCount = cats.reduce(
+          (n, c) => n + c.types.reduce((m, t) => m + t.count, 0), 0);
+        const head = document.createElement('p');
+        head.className = 'text-xs text-slate-400 mb-2';
+        head.textContent = `${totalTypes} types in ${cats.length} categories ` +
+                           `(${totalCount.toLocaleString()} POIs)`;
+        sidebar.appendChild(head);
+
+        for (const cat of cats) {
+          const det = document.createElement('details');
+          det.className = 'map-cat-details';
+          // collapsed by default per operator preference
+          const sum = document.createElement('summary');
+          sum.textContent = `${cat.name} (${cat.types.length})`;
+          det.appendChild(sum);
+
+          const wrap = document.createElement('div');
+          wrap.className = 'map-cat-types';
+          for (const t of cat.types) {
+            const id = `cat_${t.type.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            const lbl = document.createElement('label');
+            const iconHtml = t.icon
+              ? `<img src="/map/api/icon/${encodeURIComponent(t.icon)}" ` +
+                `alt="" style="width:16px;height:16px;vertical-align:middle;` +
+                `margin-right:4px;border-radius:3px;background:#fff5;` +
+                `padding:1px" onerror="this.style.display='none'">`
+              : '';
+            lbl.innerHTML =
+              `<input type="checkbox" id="${id}" data-type="${escapeHtml(t.type)}">` +
+              `<span>${iconHtml}${escapeHtml(t.type)} ` +
+              `<span class="text-slate-500">(${t.count})</span></span>`;
+            wrap.appendChild(lbl);
+            lbl.querySelector('input').addEventListener('change', (e) => {
+              toggleCategory(t.type, e.target.checked);
+            });
+          }
+          det.appendChild(wrap);
+          sidebar.appendChild(det);
+        }
+      })
+      .catch(err => {
+        sidebar.innerHTML = `<p class="text-xs text-rose-300">load failed: ${escapeHtml(err)}</p>`;
+      });
+  }
+
+  // ── Level switcher ──
+  document.querySelectorAll('.map-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const lvl = btn.dataset.level;
+      if (lvl === currentLevel) return;
+      currentLevel = lvl;
+      // Update tab styling
+      document.querySelectorAll('.map-tab').forEach(b => {
+        const active = b.dataset.level === lvl;
+        b.classList.toggle('bg-emerald-700', active);
+        b.classList.toggle('text-white', active);
+        b.classList.toggle('bg-slate-700', !active);
+        b.classList.toggle('text-slate-200', !active);
+      });
+      // Reset map state for the new level
+      clearAllPois();
+      setTileLayer(lvl);
+      loadCategories(lvl);
+    });
+  });
+
+  // ── Live player markers (SSE) ──
+  // Connects to /map/api/players/stream and plots a marker per
+  // online player. Markers update in place when their position
+  // changes; they disappear when the player leaves the server or
+  // switches to a different map.
+  const playerMarkers = new Map();  // steam_id -> L.marker
+  let playerStream = null;
+
+  function plotOrUpdatePlayer(steam_id, p) {
+    const ll = ueToLatLng(p.x, p.y);
+    if (playerMarkers.has(steam_id)) {
+      const m = playerMarkers.get(steam_id);
+      m.setLatLng(ll);
+      // Refresh popup so the location field updates
+      m.setPopupContent(playerPopupHtml(steam_id, p));
+      return;
+    }
+    const m = L.marker(ll, {
+      icon: L.divIcon({
+        className: '',
+        html: `<div class="map-player-marker" title="${escapeHtml(p.name)}">${escapeHtml((p.name||'?')[0])}</div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      }),
+      zIndexOffset: 1000,  // always render above POI markers
+    });
+    m.bindPopup(playerPopupHtml(steam_id, p));
+    m.addTo(map);
+    playerMarkers.set(steam_id, m);
+  }
+
+  function playerPopupHtml(steam_id, p) {
+    return (
+      `<div class="map-poi-popup">` +
+      `<b>${escapeHtml(p.name)}</b>` +
+      `<br><span style="font-size:11px;color:#9ca3af">SteamID: ${escapeHtml(steam_id)}</span>` +
+      `<br><span style="font-size:10px;color:#6b7280">UE (${p.x|0}, ${p.y|0}) on ${escapeHtml(p.level || '?')}</span>` +
+      `</div>`
+    );
+  }
+
+  function applyPlayerSnapshot(state) {
+    // state: {steam_id: {name, x, y, z, level, last_seen}}
+    const seen = new Set();
+    for (const [steam_id, p] of Object.entries(state || {})) {
+      if (p.level !== currentLevel) continue;  // not on this map
+      seen.add(steam_id);
+      plotOrUpdatePlayer(steam_id, p);
+    }
+    // Remove markers for players no longer in the snapshot OR who
+    // moved to a different map.
+    for (const [steam_id, m] of playerMarkers) {
+      if (!seen.has(steam_id)) {
+        map.removeLayer(m);
+        playerMarkers.delete(steam_id);
+      }
+    }
+  }
+
+  function clearAllPlayers() {
+    for (const m of playerMarkers.values()) {
+      map.removeLayer(m);
+    }
+    playerMarkers.clear();
+  }
+
+  function connectPlayerStream() {
+    if (playerStream) playerStream.close();
+    playerStream = new EventSource('/map/api/players/stream');
+    playerStream.addEventListener('players', (e) => {
+      try {
+        const state = JSON.parse(e.data);
+        applyPlayerSnapshot(state);
+      } catch (err) {
+        console.warn('player snapshot parse failed', err);
+      }
+    });
+    // EventSource auto-reconnects on close; nothing to do here.
+  }
+
+  // ── Initial setup ──
+  setTileLayer(currentLevel);
+  // Centre on UE (0, 0) at a moderate zoom
+  map.setView(ueToLatLng(0, 0), 3);
+  loadCategories(currentLevel);
+  connectPlayerStream();
+
+  // When the level switches, clear player markers (the next stream
+  // tick re-plots whoever's on the new map).
+  document.querySelectorAll('.map-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Tab handler above already fired clearAllPois + setTileLayer
+      // + loadCategories. We just need to clear player markers too.
+      clearAllPlayers();
+    });
+  });
+
+  // Expose a few helpers for #66 follow-on work to plug into
+  window.smManagerMap = {
+    map, ueToLatLng,
+    currentLevel: () => currentLevel,
+    playerMarkers, applyPlayerSnapshot, plotOrUpdatePlayer,
+  };
+})();
+</script>
+
+{% endblock %}

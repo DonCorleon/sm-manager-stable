@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+{% block title %}Settings · Soulmask Manager{% endblock %}
+{% block content %}
+
+<div class="space-y-5 max-w-3xl">
+
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h2 class="text-lg font-semibold mb-1">Manager settings</h2>
+    <p class="text-sm text-slate-400">
+      Edit and save. Changes marked <em class="text-amber-300">restart required</em>
+      take effect after you stop and re-launch the manager. Other changes are live
+      on the next page render.
+    </p>
+  </div>
+
+  {% if errors %}
+  <div class="bg-rose-900/30 border border-rose-700 rounded p-3">
+    <div class="text-rose-300 font-medium mb-1">Please fix:</div>
+    <ul class="list-disc list-inside text-sm text-rose-200 space-y-1">
+      {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if saved_count is not none and saved_count > 0 %}
+  <div class="bg-emerald-900/30 border border-emerald-700 rounded p-3 text-sm text-emerald-200">
+    Saved {{ saved_count }} change(s).
+  </div>
+  {% elif saved_count == 0 %}
+  <div class="bg-slate-800 border border-slate-700 rounded p-3 text-sm text-slate-400">
+    No changes to save.
+  </div>
+  {% endif %}
+
+  {# Discord test-connection result banner. The button lives inside the
+     Discord tab below; the redirect carries ?tab=Discord+webhook+relay
+     so the operator lands back on the same tab after submit. #}
+  {% if discord_test_msg %}
+  <div class="rounded p-3 text-sm border
+              {% if discord_test_ok %}bg-emerald-900/30 border-emerald-700 text-emerald-200
+              {% else %}bg-rose-900/30 border-rose-700 text-rose-200{% endif %}">
+    {{ discord_test_msg }}
+  </div>
+  {% endif %}
+
+  {# Git-auth result banner (generate-key / test-connection results).
+     Same pattern as discord: button inside Manager-update-detection
+     tab posts to a sibling form, route redirects back with
+     ?tab=Manager+update+detection&git_msg=... #}
+  {% if git_msg %}
+  <div class="rounded p-3 text-sm border
+              {% if git_ok %}bg-emerald-900/30 border-emerald-700 text-emerald-200
+              {% else %}bg-rose-900/30 border-rose-700 text-rose-200{% endif %}">
+    {{ git_msg }}
+  </div>
+  {% endif %}
+
+  <form method="POST" class="space-y-5">
+    {# DaisyUI tabs. The radios share name="_settings_tab" -- they get
+       submitted with the form, but the POST handler only reads keys
+       defined in SETTINGS_SCHEMA so the extra field is harmless.
+       sm:block / hidden lets the tab labels wrap on narrow screens
+       (DaisyUI's tabs row scrolls horizontally if there are too many
+       tabs to fit, which is acceptable on mobile). #}
+    <div role="tablist" class="tabs tabs-border bg-slate-800 rounded-lg
+                                 border border-slate-700 overflow-hidden">
+      {% for section in schema %}
+        {# `active_tab` query param keeps the operator on the right tab
+           after a redirect (Discord test, git auth test, generate key).
+           Falls back to the first tab when nothing's specified. #}
+        <input type="radio" name="_settings_tab" role="tab" class="tab"
+               aria-label="{{ section.title }}"
+               {% if (active_tab and active_tab == section.title) or (not active_tab and loop.first) %}checked{% endif %}>
+        <div role="tabpanel"
+             class="tab-content bg-slate-800 border-slate-700 p-5 space-y-4">
+          {% if section.description %}
+            <p class="text-xs text-slate-400">{{ section.description }}</p>
+          {% endif %}
+
+          {# Per-section custom blocks. The Discord tab gets a Test
+             connection button at the bottom; placed AFTER the items
+             loop below so it sits below the relay settings.
+             Form association via `form="discord-test-form"` because
+             the outer settings form doesn't allow nested forms; the
+             actual <form> element lives below the outer </form>. #}
+          {% for item in section.items %}
+          {# `gated_by[item.key]` is set by the schema's `controls` arrays: when
+             the controlling checkbox is unchecked, this row's input gets the
+             disabled + opacity-50 treatment. We compute the initial gated
+             state server-side too (`gate_off`) so there's no JS-flash on
+             first paint. The JS at the bottom keeps it in sync as the user
+             toggles. #}
+          {% set ctrl = gated_by.get(item.key) %}
+          {% set gate_off = ctrl and not values.get(ctrl) %}
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 items-start
+                      {% if gate_off %}opacity-50{% endif %}"
+               {% if ctrl %}data-gated-by="{{ ctrl }}"{% endif %}>
+            <label for="set_{{ item.key }}"
+                   class="text-sm font-medium text-slate-200 sm:pt-1.5
+                          inline-flex items-center gap-1 flex-wrap">
+              <span>{{ item.label }}</span>
+              {% if item.help %}
+                {# (?) info icon -- Tippy attaches to [data-tip] in
+                   base.html. button type=button so Enter on the icon
+                   doesn't submit the form. #}
+                <button type="button" tabindex="0" data-tip="{{ item.help }}"
+                        aria-label="More info"
+                        class="inline-flex items-center justify-center
+                               w-4 h-4 rounded-full text-[10px]
+                               bg-slate-700 hover:bg-slate-600
+                               text-slate-300 hover:text-white
+                               cursor-help leading-none">?</button>
+              {% endif %}
+              {% if item.restart_required %}
+                <span class="text-xs text-amber-300 italic">(restart required)</span>
+              {% endif %}
+            </label>
+            <div class="sm:col-span-2">
+              {% if item.kind == 'bool' %}
+                <label class="inline-flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" id="set_{{ item.key }}" name="{{ item.key }}"
+                         value="1"
+                         {% if values[item.key] %}checked{% endif %}
+                         {% if item.controls %}data-controls="{{ item.controls|join(' ') }}"{% endif %}
+                         class="w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-800">
+                  <span class="text-sm text-slate-300 font-mono">
+                    {% if values[item.key] %}enabled{% else %}disabled{% endif %}
+                  </span>
+                </label>
+              {% elif item.kind == 'choice' %}
+                <select id="set_{{ item.key }}" name="{{ item.key }}"
+                        class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full sm:w-64 text-sm">
+                  {% for c in item.choices %}
+                  <option value="{{ c }}" {% if values[item.key] == c %}selected{% endif %}>{{ c }}</option>
+                  {% endfor %}
+                </select>
+              {% elif item.kind == 'int' %}
+                <input type="number" id="set_{{ item.key }}" name="{{ item.key }}"
+                       value="{{ values[item.key] }}"
+                       {% if item.min is not none %}min="{{ item.min }}"{% endif %}
+                       {% if item.max is not none %}max="{{ item.max }}"{% endif %}
+                       {% if gate_off %}disabled{% endif %}
+                       class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full sm:w-32 text-sm font-mono disabled:cursor-not-allowed">
+                {% if item.min is not none and item.max is not none %}
+                  <span class="text-xs text-slate-500 ml-2">range {{ item.min }}--{{ item.max }}</span>
+                {% endif %}
+              {% elif item.kind == 'secret' %}
+                {# Secret fields render as a password input with EMPTY value;
+                   an empty submission is interpreted by the route as
+                   "preserve current value", so the operator can save other
+                   settings without re-typing the secret. The placeholder
+                   tells them whether a value is currently stored. #}
+                <input type="password" id="set_{{ item.key }}" name="{{ item.key }}"
+                       value=""
+                       placeholder="{% if values[item.key] %}*** stored (leave blank to keep){% else %}(not set){% endif %}"
+                       {% if gate_off %}disabled{% endif %}
+                       class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm font-mono disabled:cursor-not-allowed">
+              {% else %}
+                <input type="text" id="set_{{ item.key }}" name="{{ item.key }}"
+                       value="{{ values[item.key] }}"
+                       {% if gate_off %}disabled{% endif %}
+                       class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 w-full text-sm disabled:cursor-not-allowed">
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+
+          {% if section.title == "Discord webhook relay" %}
+            {# Test-connection button. Uses form="discord-test-form" so
+               clicking it submits the SIBLING form below, not the
+               outer settings form. Save the webhook URL first if
+               you've just edited it -- this tests the SAVED value. #}
+            <div class="pt-2 border-t border-slate-700">
+              <p class="text-xs text-slate-400 mb-2">
+                Posts a "connected" message to the configured webhook
+                so you can confirm the URL is right without waiting for
+                an in-game event. Save any URL changes first &mdash;
+                this tests the saved value.
+              </p>
+              <button type="submit" form="discord-test-form"
+                      class="bg-emerald-700 hover:bg-emerald-600 px-3 py-1.5 rounded text-sm font-medium">
+                Test connection
+              </button>
+            </div>
+          {% endif %}
+
+          {% if section.title == "Manager update detection" %}
+            {# Manager git-auth setup. Same form="..." pattern -- buttons
+               here associate with sibling forms below the outer settings
+               form via form-attribute, since HTML5 forbids form nesting.
+               Auth lives next to the auto-update-poll settings because
+               configuring auth is what makes those settings useful. #}
+            <div class="pt-2 border-t border-slate-700 space-y-3">
+              <div class="text-sm font-medium text-slate-200">Auth setup</div>
+              {% if not git_resolved %}
+                <div class="bg-rose-900/30 border border-rose-700 rounded p-3 text-sm text-rose-200">
+                  <strong>Git not found.</strong> Manager updates require
+                  git on this machine. Run the
+                  <a href="/setup/" class="underline hover:text-rose-100">Setup wizard</a>
+                  &mdash; it installs PortableGit alongside SteamCMD on
+                  first run.
+                </div>
+              {% endif %}
+              <p class="text-xs text-slate-400">
+                Remote: <code class="font-mono">{{ manager_remote }}</code>
+              </p>
+              <p class="text-xs text-slate-400">
+                Generate a deploy key here, paste the public half into the repo's
+                {% if manager_remote_keys_url %}
+                  <a href="{{ manager_remote_keys_url }}"
+                     target="_blank" rel="noopener"
+                     class="underline hover:text-slate-200">Deploy keys page</a>
+                {% else %}
+                  Deploy keys page on your git host
+                {% endif %}
+                (leave "Allow write access" off &mdash; pulls don't need it),
+                then click Test connection. Each machine running the manager has
+                its own revocable key.
+              </p>
+
+              {% if git_status.deploy_key_present %}
+                <div class="text-xs text-emerald-400">&#10003; Key present at <code class="font-mono">data/deploy_key</code></div>
+                <label class="block text-xs text-slate-400 mb-1">Public key (paste this into GitHub):</label>
+                <textarea id="pubkey-textarea" readonly rows="3"
+                          onclick="this.select()"
+                          class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs font-mono break-all"
+                >{{ git_status.deploy_pubkey }}</textarea>
+                <div class="flex flex-wrap items-center gap-2 mt-2">
+                  <button type="button"
+                          onclick="(function(b){var t=document.getElementById('pubkey-textarea');navigator.clipboard.writeText(t.value);b.textContent='Copied!';setTimeout(function(){b.textContent='Copy public key';},1500);})(this);"
+                          class="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600">
+                    Copy public key
+                  </button>
+                  <button type="submit" form="git-test-form"
+                          data-busy-text="Testing&hellip;"
+                          class="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600">
+                    Test connection
+                  </button>
+                  <button type="submit" form="git-regenerate-form"
+                          onclick="return confirm('Regenerate the deploy key?\n\nThis REVOKES the current key. You will need to remove the old entry from the repo Deploy keys page and add the new one (or the manager will lose update access until you do).');"
+                          class="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-rose-300 ml-auto">
+                    Regenerate
+                  </button>
+                </div>
+              {% else %}
+                <p class="text-xs text-slate-400">
+                  No deploy key yet. Click below to generate one.
+                </p>
+                <button type="submit" form="git-generate-form"
+                        {% if not git_resolved %}disabled
+                        title="Git not available on this machine"
+                        class="bg-slate-800 px-4 py-2 rounded text-sm font-medium text-slate-500 cursor-not-allowed"
+                        {% else %}
+                        class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium"
+                        {% endif %}>
+                  Generate deploy key
+                </button>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="flex justify-end gap-3 pt-2">
+      <a href="/" class="px-4 py-2 text-sm text-slate-300 hover:text-white">Cancel</a>
+      <button type="submit"
+              class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+        Save settings
+      </button>
+    </div>
+  </form>
+
+  {# JS: when a bool checkbox toggles, disable its controlled inputs so
+     the field is visibly unavailable. Disabled inputs don't post their
+     value; the route's POST handler treats "field absent from form" as
+     "preserve current value" so the operator's interval isn't lost. #}
+  <script>
+    (function () {
+      function applyGate(controllerKey, isOn) {
+        var rows = document.querySelectorAll('[data-gated-by="' + controllerKey + '"]');
+        rows.forEach(function (row) {
+          row.classList.toggle('opacity-50', !isOn);
+          var inputs = row.querySelectorAll('input, select, textarea');
+          inputs.forEach(function (el) {
+            el.disabled = !isOn;
+          });
+        });
+      }
+
+      function syncCheckboxLabel(cb) {
+        // The little "enabled" / "disabled" word next to each bool checkbox.
+        var span = cb.parentElement.querySelector('span');
+        if (span) span.textContent = cb.checked ? 'enabled' : 'disabled';
+      }
+
+      var controllers = document.querySelectorAll('input[type="checkbox"][data-controls]');
+      controllers.forEach(function (cb) {
+        var keys = (cb.getAttribute('data-controls') || '').split(/\s+/).filter(Boolean);
+        function syncAll() {
+          keys.forEach(function (k) { applyGate(k, cb.checked); });
+          syncCheckboxLabel(cb);
+        }
+        cb.addEventListener('change', syncAll);
+        // Initial state from server-rendered checked attribute.
+        syncAll();
+      });
+
+      // Standalone bool checkboxes (no controls): just keep the label fresh.
+      var standalones = document.querySelectorAll(
+        'input[type="checkbox"]:not([data-controls])'
+      );
+      standalones.forEach(function (cb) {
+        // Skip non-settings checkboxes. Ours all have id starting with set_
+        if (!cb.id || cb.id.indexOf('set_') !== 0) return;
+        cb.addEventListener('change', function () { syncCheckboxLabel(cb); });
+      });
+    })();
+  </script>
+
+  {# Sibling forms for the buttons that live inside the tabs. HTML5
+     forbids form nesting, so each button up in its tabpanel uses
+     form="<id>" to associate with one of these. The forms themselves
+     stay here, outside the outer settings <form>. #}
+  <form id="discord-test-form" method="POST" action="/settings/test-discord"></form>
+  <form id="git-generate-form" method="POST" action="{{ url_for('self_update.generate_key') }}"></form>
+  <form id="git-regenerate-form" method="POST" action="{{ url_for('self_update.generate_key') }}">
+    <input type="hidden" name="overwrite" value="1">
+  </form>
+  <form id="git-test-form" method="POST" action="{{ url_for('self_update.test_connection') }}"></form>
+
+  <!-- Manager actions -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <h3 class="text-base font-semibold mb-1">Manager process</h3>
+    <p class="text-xs text-slate-400 mb-4">
+      Restart the manager to apply settings marked
+      <em class="text-amber-300">restart required</em>. Game servers, if running,
+      keep going independently &mdash; the dashboard re-adopts them automatically
+      on the next load. Any in-flight manager op (start / stop / update) is
+      cut off, and you'd need to retrigger it.
+    </p>
+    <form method="POST" action="/settings/restart-manager"
+          onsubmit="return confirm('Restart the manager process now? Active SSE log streams will reconnect; running game servers are unaffected.')">
+      <button type="submit"
+              class="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded text-sm font-medium">
+        &#9881; Restart manager
+      </button>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}Mods · Soulmask Manager{% endblock %}
+{% block content %}
+
+<div class="space-y-5 max-w-3xl">
+
+  <!-- Page header -->
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h2 class="text-lg font-semibold mb-1">Workshop mods</h2>
+    <p class="text-sm text-slate-400">
+      Subscribe to Steam Workshop mods by ID. The manager downloads via
+      SteamCMD, places them under <code class="font-mono text-xs">WS\Mods\</code>,
+      and advertises the IDs to connecting clients via
+      <code class="font-mono text-xs">-mod="..."</code> on the launch line.
+      Server-side pak mounting auto-discovers everything in
+      <code class="font-mono text-xs">WS\Mods\</code> regardless.
+    </p>
+  </div>
+
+  <!-- Flash banner -->
+  {% if flash_msg %}
+    <div class="rounded p-3 text-sm border
+                {% if flash_kind == 'ok' %}bg-emerald-900/30 border-emerald-700 text-emerald-200
+                {% elif flash_kind == 'error' %}bg-rose-900/30 border-rose-700 text-rose-200
+                {% else %}bg-slate-800 border-slate-700 text-slate-200{% endif %}">
+      {{ flash_msg }}
+    </div>
+  {% endif %}
+
+  {% set mods_busy = server_status.any_running or server_status.op_in_progress %}
+
+  <!-- Add box -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <h3 class="text-base font-semibold mb-3">Add a mod</h3>
+    <form method="POST" action="{{ url_for('mods.add') }}"
+          class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"
+          data-busy-text="Installing&hellip;">
+      <input type="text" name="workshop_id"
+             pattern="[0-9]+"
+             required inputmode="numeric"
+             placeholder="Steam Workshop ID (e.g. 3717432062)"
+             class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm flex-1
+                    focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed"
+             {% if mods_busy %}disabled{% endif %}>
+      <button type="submit"
+              {% if mods_busy %}disabled
+                data-tip="Stop the server(s) first -- SteamCMD can't update while WSServer.exe holds the install dir."
+                class="bg-slate-800 px-4 py-1.5 rounded text-sm font-medium text-slate-500 cursor-not-allowed"
+              {% else %}
+                class="bg-emerald-600 hover:bg-emerald-500 px-4 py-1.5 rounded text-sm font-medium"
+              {% endif %}>
+        Add
+      </button>
+    </form>
+    <p class="text-xs text-slate-500 mt-2">
+      Find the ID in a Workshop URL: <code class="font-mono">https://steamcommunity.com/sharedfiles/filedetails/?id=<span class="text-emerald-300">3717432062</span></code>.
+      If the ID is already installed, use the <span class="text-amber-300">Redownload</span> button on its row instead.
+    </p>
+  </div>
+
+  <!-- Installed list -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-base font-semibold">Installed</h3>
+      <span class="text-xs text-slate-400">
+        {{ mods_list|length }} folder{{ '' if mods_list|length == 1 else 's' }}
+      </span>
+    </div>
+
+    {% if not mods_list %}
+      <p class="text-sm text-slate-400 italic">
+        No mods installed. Paste a Workshop ID above to add one.
+      </p>
+    {% else %}
+      <ul class="divide-y divide-slate-700">
+        {% for m in mods_list %}
+          <li class="py-3 flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4">
+            <div class="flex-1 min-w-0">
+              {# Headline: friendly name (from ModeInfo.json or .uplugin)
+                 with provenance badge. Falls back to folder ID if neither
+                 metadata file yields anything. #}
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-semibold text-slate-100">
+                  {{ m.name or m.folder }}
+                </span>
+                {% if m.version %}
+                  <span class="text-xs font-mono text-slate-400">v{{ m.version }}</span>
+                {% endif %}
+                {% if m.provenance == 'workshop' %}
+                  <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-emerald-800 text-emerald-100"
+                        data-tip="Installed via this manager from Steam Workshop ID {{ m.workshop_id }}">
+                    Workshop
+                  </span>
+                {% else %}
+                  <span class="text-xs uppercase font-mono px-2 py-0.5 rounded bg-slate-700 text-slate-200"
+                        data-tip="Folder placed in WS\Mods\ outside this manager (e.g. local dev mod). Won't be removed by this UI.">
+                    Local
+                  </span>
+                {% endif %}
+              </div>
+              {# Sub-headline: author + description, when known. #}
+              {% if m.author or m.description %}
+                <div class="text-xs text-slate-300 mt-1">
+                  {% if m.author %}
+                    by <span class="text-slate-200">{{ m.author }}</span>
+                  {% endif %}
+                  {% if m.author and m.description %}&middot;{% endif %}
+                  {% if m.description %}{{ m.description }}{% endif %}
+                </div>
+              {% endif %}
+              {# Footer: folder ID, workshop link, size, added-at. The
+                 folder ID is the only identifier the engine ever sees;
+                 keeping it visible (small + monospace) helps when
+                 reading manager.log or grepping WS\Mods\. #}
+              <div class="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                <span class="font-mono" data-tip="WS\Mods\ folder name -- this is what the engine sees">{{ m.folder }}</span>
+                {% if m.workshop_id %}
+                  <span>&middot;
+                    <a href="https://steamcommunity.com/sharedfiles/filedetails/?id={{ m.workshop_id }}"
+                       target="_blank" rel="noopener"
+                       class="text-emerald-300 hover:underline font-mono">Workshop {{ m.workshop_id }}</a>
+                  </span>
+                {% elif m.mod_id %}
+                  {# Local-provenance row but ModeInfo.json reveals it
+                     IS a Workshop mod the operator placed by hand. #}
+                  <span data-tip="This Local mod has a ModID in its ModeInfo.json -- it was originally a Workshop item.">&middot;
+                    <a href="https://steamcommunity.com/sharedfiles/filedetails/?id={{ m.mod_id }}"
+                       target="_blank" rel="noopener"
+                       class="text-slate-400 hover:underline font-mono">Workshop {{ m.mod_id }}</a>
+                  </span>
+                {% endif %}
+                <span>&middot; <span class="font-mono">{{ "%.1f"|format(m.size_mb) }} MB</span></span>
+                {% if m.added_at %}
+                  <span>&middot; added <span class="font-mono">{{ m.added_at }}</span></span>
+                {% endif %}
+              </div>
+            </div>
+            {% if m.provenance == 'workshop' %}
+              <div class="flex gap-2 flex-wrap">
+                <form method="POST" action="{{ url_for('mods.redownload', folder=m.folder) }}"
+                      onsubmit="return confirm('Redownload {{ m.folder }} from Workshop ID {{ m.workshop_id }}?\n\nRuns SteamCMD and overwrites the local files. The manifest entry is preserved (added_at stays the same).');">
+                  <button type="submit"
+                          {% if mods_busy %}disabled
+                            data-tip="Stop the server(s) first -- SteamCMD can't update while WSServer.exe holds files open."
+                            class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
+                          {% else %}
+                            class="px-3 py-1.5 rounded text-sm bg-amber-700 hover:bg-amber-600 text-amber-50"
+                          {% endif %}>
+                    Redownload
+                  </button>
+                </form>
+                <form method="POST" action="{{ url_for('mods.remove', folder=m.folder) }}"
+                      onsubmit="return confirm('Remove {{ m.folder }} from WS\\Mods\\ and drop the manifest entry?\n\nThis deletes the mod files. The Workshop subscription record is also cleared. To get the mod back, re-add the Workshop ID.');">
+                  <button type="submit"
+                          {% if mods_busy %}disabled
+                            data-tip="Stop the server(s) first."
+                            class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
+                          {% else %}
+                            class="px-3 py-1.5 rounded text-sm bg-rose-700 hover:bg-rose-600 text-rose-50"
+                          {% endif %}>
+                    Remove
+                  </button>
+                </form>
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+
+  <!-- Live activity log (shared with /updates SSE, filtered to source=steam) -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-base font-semibold">Activity log</h3>
+      <span id="mods-op-banner"
+            class="text-xs uppercase font-mono px-2 py-0.5 rounded
+                   bg-slate-700 text-slate-300">idle</span>
+    </div>
+    <p class="text-xs text-slate-400 mb-3">
+      SteamCMD output for mod install / remove / verify operations
+      streams here live. Manager (git) update activity is filtered out
+      &mdash; see /updates for that.
+    </p>
+    <pre id="mods-log"
+         class="bg-slate-950 border border-slate-700 rounded p-3
+                font-mono text-xs leading-tight overflow-y-auto
+                whitespace-pre-wrap break-all"
+         style="height: 22rem;"
+    ><span class="text-slate-500">(connecting...)</span></pre>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  const logEl = document.getElementById("mods-log");
+  const banner = document.getElementById("mods-op-banner");
+  if (!logEl || !banner) return;
+
+  function isAtBottom() {
+    return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 32;
+  }
+
+  let placeholderCleared = false;
+  function appendLine(seq, ts, source, line) {
+    if (source !== "steam") return;
+    if (!placeholderCleared) {
+      logEl.innerHTML = "";
+      placeholderCleared = true;
+    }
+    const span = document.createElement("span");
+    span.className = "text-amber-300";
+    const d = new Date(ts * 1000);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    span.textContent = `${hh}:${mm}:${ss} ${line}\n`;
+    const stick = isAtBottom();
+    logEl.appendChild(span);
+    if (stick) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setBanner(state) {
+    const phase = state.phase || "idle";
+    const name = state.name || "";
+    const source = state.source || "";
+    if (source && source !== "steam" && phase === "running") {
+      banner.textContent = "idle (other op running)";
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-slate-700 text-slate-300";
+      return;
+    }
+    if (phase === "running" && source === "steam") {
+      banner.textContent = `running: ${name}`;
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-amber-700 text-amber-100";
+    } else if (phase === "done" && source === "steam") {
+      banner.textContent = `done: ${name}`;
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-emerald-800 text-emerald-100";
+    } else if (phase === "failed" && source === "steam") {
+      banner.textContent = `failed: ${name}`;
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-rose-800 text-rose-100";
+    } else {
+      banner.textContent = "idle";
+      banner.className = "text-xs uppercase font-mono px-2 py-0.5 " +
+        "rounded bg-slate-700 text-slate-300";
+    }
+  }
+
+  let lastPhase = null;
+  let lastSource = null;
+  let reloadTimer = null;
+  const es = new EventSource("/updates/sse");
+  es.addEventListener("line", function (e) {
+    try {
+      const o = JSON.parse(e.data);
+      appendLine(o.seq, o.ts, o.source, o.line);
+    } catch (err) { /* ignore malformed frame */ }
+  });
+  es.addEventListener("op", function (e) {
+    let s;
+    try { s = JSON.parse(e.data); } catch (err) { return; }
+    setBanner(s);
+    // Reload to refresh the installed list when a mod-install / remove
+    // finishes. Only reload on running -> terminal transition for an
+    // op whose source is "steam" (we don't care about manager-update
+    // ops).
+    if (lastPhase === "running"
+        && lastSource === "steam"
+        && (s.phase === "done" || s.phase === "failed")
+        && reloadTimer === null) {
+      reloadTimer = setTimeout(function () {
+        es.close();
+        location.reload();
+      }, 800);
+    }
+    lastPhase = s.phase;
+    lastSource = s.source;
+  });
+})();
+</script>
+
+{% endblock %}

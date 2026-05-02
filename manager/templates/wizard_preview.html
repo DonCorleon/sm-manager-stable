@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Preview · Soulmask Manager{% endblock %}
+{% block content %}
+<div class="space-y-5 max-w-3xl">
+
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h2 class="text-lg font-semibold mb-1">Preview</h2>
+    <p class="text-sm text-slate-400">
+      This is exactly what the manager will configure. Nothing has been installed yet --
+      the &ldquo;Run setup&rdquo; button below is disabled until batch 3.
+    </p>
+  </div>
+
+  <!-- Server identity card(s) -->
+  {% for entry in instance_args %}
+  {% set ri = entry.runtime %}
+  {% set inst = ri.instance %}
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-base font-semibold
+                 {% if ri.role == 'main' %}text-emerald-300
+                 {% elif ri.role == 'child' %}text-blue-300
+                 {% else %}text-slate-200{% endif %}">
+        {{ inst.name or "(no name set)" }}
+      </h3>
+      <span class="text-xs uppercase tracking-wider px-2 py-0.5 rounded font-mono
+                   {% if ri.role == 'main' %}bg-emerald-700 text-emerald-100
+                   {% elif ri.role == 'child' %}bg-blue-700 text-blue-100
+                   {% else %}bg-slate-700 text-slate-200{% endif %}">
+        {{ ri.role }}
+      </span>
+    </div>
+    <dl class="grid grid-cols-1 sm:grid-cols-3 gap-y-2 gap-x-4 text-sm mb-4">
+      <dt class="text-slate-400">Map</dt>
+      <dd class="col-span-2 font-mono">{{ inst.map_name }}</dd>
+
+      <dt class="text-slate-400">Server ID</dt>
+      <dd class="col-span-2 font-mono">{{ ri.serverid }}</dd>
+
+      <dt class="text-slate-400">Max players</dt>
+      <dd class="col-span-2">{{ config.max_players }}</dd>
+
+      <dt class="text-slate-400">Game port</dt>
+      <dd class="col-span-2 font-mono">{{ inst.game_port }} <span class="text-slate-500">(public)</span></dd>
+
+      <dt class="text-slate-400">Query port</dt>
+      <dd class="col-span-2 font-mono">{{ inst.query_port }} <span class="text-slate-500">(public)</span></dd>
+
+      <dt class="text-slate-400">EchoPort</dt>
+      <dd class="col-span-2 font-mono">{{ inst.echo_port }} <span class="text-slate-500">(loopback only)</span></dd>
+    </dl>
+
+    <div class="text-xs text-slate-400 mb-1">Launch command:</div>
+    <pre class="bg-slate-950 border border-slate-700 rounded p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all"><span class="text-slate-500">WSServer.exe</span> {{ entry.args | join(' ') }}</pre>
+  </div>
+  {% endfor %}
+
+  <!-- Cluster summary (if cluster) -->
+  {% if config.mode == 'cluster' %}
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h3 class="text-base font-semibold mb-3">Cluster wiring</h3>
+    <dl class="grid grid-cols-1 sm:grid-cols-3 gap-y-2 gap-x-4 text-sm">
+      <dt class="text-slate-400">Mode</dt>
+      <dd class="col-span-2">
+        Cluster -- main &harr; child via TCP <code class="text-xs font-mono">127.0.0.1:{{ config.mainserverport }}</code>
+      </dd>
+
+      <dt class="text-slate-400">Main map</dt>
+      <dd class="col-span-2 font-mono">{{ config.main_map }}</dd>
+
+      <dt class="text-slate-400">Startup order</dt>
+      <dd class="col-span-2">Main first &rarr; wait until responsive &rarr; child.</dd>
+
+      <dt class="text-slate-400">Shutdown order</dt>
+      <dd class="col-span-2">Child first &rarr; wait for exit &rarr; main.</dd>
+
+      <dt class="text-slate-400">Cross-server</dt>
+      <dd class="col-span-2">
+        <code class="text-xs font-mono">KaiQiKuaFu = 1</code> will be patched into both nodes' GameXishu.json profile <code>"1"</code>.
+      </dd>
+    </dl>
+  </div>
+  {% endif %}
+
+  <!-- Game settings -->
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h3 class="text-base font-semibold mb-3">Game settings</h3>
+    <dl class="grid grid-cols-1 sm:grid-cols-3 gap-y-2 gap-x-4 text-sm">
+      <dt class="text-slate-400">Game mode</dt>
+      <dd class="col-span-2 uppercase font-mono">{{ config.game_mode }}</dd>
+
+      <dt class="text-slate-400">Admin password</dt>
+      <dd class="col-span-2 font-mono">{{ config.admin_password }}</dd>
+
+      <dt class="text-slate-400">Join password</dt>
+      <dd class="col-span-2 font-mono">
+        {% if config.join_password %}{{ config.join_password }}
+        {% else %}<span class="text-slate-500">(none -- open server)</span>{% endif %}
+      </dd>
+
+      <dt class="text-slate-400">Gameplay tuning preset</dt>
+      <dd class="col-span-2 font-mono text-xs break-all">{{ config.gameplay_template }}</dd>
+    </dl>
+  </div>
+
+  <!-- What will happen on Run -->
+  <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+    <h3 class="text-base font-semibold mb-3">When you click &ldquo;Run setup&rdquo;</h3>
+    <ol class="list-decimal list-inside text-sm text-slate-300 space-y-2">
+      {% for c in checks %}
+        {% if not c.passed and c.fixable %}
+          {% if c.name == "SteamCMD" %}
+          <li>Download SteamCMD into <code class="text-xs">SM_Manager\steamcmd\</code> (~5&nbsp;MB).</li>
+          {% elif c.name == "Soulmask install" %}
+          <li>Install the Soulmask dedicated server via SteamCMD into the configured install directory (~5--15&nbsp;GB, can take 10--30&nbsp;min).</li>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+      <li>Copy <code class="text-xs">{{ config.gameplay_template }}</code> to <code class="text-xs">WS\Saved\GameplaySettings\GameXishu.json</code> (overwrites if present).</li>
+      {% if config.mode == 'cluster' %}
+      <li>Patch <code class="text-xs">KaiQiKuaFu = 1</code> into profile <code>"1"</code> of GameXishu.json (cross-server enable).</li>
+      {% endif %}
+      <li>Engine.ini is intentionally left to Soulmask's defaults &mdash; everything we expose is set via launch params, which take precedence anyway.</li>
+      <li>Mark setup complete and unlock the dashboard's Start button.</li>
+    </ol>
+  </div>
+
+  {# Dynamic install-step preview built server-side from the bootstrap
+     checks. Only lists things that ACTUALLY need to happen on this
+     machine. Confirmation dialog text mirrors the same list. #}
+  <div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mt-4">
+    <div class="text-sm text-slate-300 mb-2">Setup will:</div>
+    <ul class="list-disc list-inside text-sm text-slate-200 space-y-1">
+      {% for step in install_steps %}
+        <li>{{ step }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="flex justify-between gap-3 pt-2">
+    <a href="/setup/wizard" class="px-4 py-2 text-sm text-slate-300 hover:text-white">
+      &larr; Back to edit
+    </a>
+    <form method="POST" action="/setup/install">
+      <button type="submit"
+              class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium"
+              onclick="return confirm({{ confirm_msg|tojson }})">
+        Run setup &rarr;
+      </button>
+    </form>
+  </div>
+
+</div>
+{% endblock %}
