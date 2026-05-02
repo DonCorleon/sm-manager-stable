@@ -414,6 +414,24 @@ def deploy_key_present() -> bool:
     return DEPLOY_KEY_PATH.exists() and DEPLOY_KEY_PUB_PATH.exists()
 
 
+def _auth_block_reason() -> Optional[str]:
+    """Returns a user-facing error string when the configured remote
+    needs SSH-key auth and the deploy key isn't ready. Returns None
+    when auth isn't needed (HTTPS public clone) or is already set up.
+
+    Existing callers that used to refuse with a flat
+    `if not deploy_key_present(): return False, "Deploy key not
+    generated yet."` should switch to this so HTTPS public clones --
+    which pull without any auth -- aren't blocked from fetching /
+    applying / probing.
+    """
+    remote = get_remote_url() or MANAGER_REMOTE_URL
+    if remote_needs_auth(remote) and not deploy_key_present():
+        return ("Deploy key not generated yet. Generate one on "
+                "Settings -> Manager update detection.")
+    return None
+
+
 def read_pubkey() -> Optional[str]:
     """Read the public key as text. None if the key hasn't been
     generated yet. Strips trailing newline."""
@@ -671,9 +689,9 @@ def probe_remote(stream: bool = False) -> tuple[bool, str]:
         return False, "git not available"
     if not get_remote_url():
         return False, "No 'origin' remote configured."
-    if not deploy_key_present():
-        return False, ("Deploy key not generated yet. Generate one on "
-                       "/manager-updates first.")
+    auth_err = _auth_block_reason()
+    if auth_err:
+        return False, auth_err
     log.verbose("probe_remote: git ls-remote origin HEAD (10s timeout)")
     res = _run(["git", "ls-remote", "origin", "HEAD"],
                extra_env=_git_ssh_env(), timeout_sec=10,
@@ -699,12 +717,14 @@ def probe_remote(stream: bool = False) -> tuple[bool, str]:
 
 
 def fetch(stream: bool = False) -> tuple[bool, str]:
-    """Fetch from origin. Uses GIT_SSH_COMMAND -> deploy key.
+    """Fetch from origin. On SSH remotes, uses GIT_SSH_COMMAND ->
+    deploy key. On HTTPS remotes (public clones), pulls without auth.
     Returns (ok, error_message_or_empty)."""
-    if not deploy_key_present():
-        return False, "Deploy key not generated yet."
     if not get_remote_url():
         return False, "No 'origin' remote configured."
+    auth_err = _auth_block_reason()
+    if auth_err:
+        return False, auth_err
     # Probe first so failures surface with a clean message rather than
     # raw git output. Same auth/network path the actual fetch uses.
     probe_ok, probe_msg = probe_remote(stream=stream)
@@ -764,9 +784,12 @@ def get_status() -> UpdateStatus:
 
 def test_connection(stream: bool = False) -> tuple[bool, str]:
     """Cheap auth test: `git ls-remote --heads origin main`. Returns
-    (ok, message). Verifies the deploy key + remote URL combination."""
-    if not deploy_key_present():
-        return False, "Deploy key not generated yet."
+    (ok, message). On SSH remotes verifies the deploy key + remote URL
+    combination; on HTTPS remotes verifies the URL is reachable and the
+    repo exists (no key needed)."""
+    auth_err = _auth_block_reason()
+    if auth_err:
+        return False, auth_err
     remote = get_remote_url()
     if not remote:
         return False, "No 'origin' remote configured."
@@ -847,8 +870,9 @@ def force_sync_to_upstream(repo_path: Optional[Path] = None,
     assumption the caller has set up its own fixture."""
     cwd = repo_path if repo_path is not None else PROJECT_ROOT
     if repo_path is None:
-        if not deploy_key_present():
-            return False, "Deploy key not generated yet."
+        auth_err = _auth_block_reason()
+        if auth_err:
+            return False, auth_err
         if not get_remote_url():
             return False, "No 'origin' remote configured."
         probe_ok, probe_msg = probe_remote()
@@ -1141,10 +1165,10 @@ def apply_update(stream: bool = False) -> tuple[bool, str]:
                        "Investigate the underlying issue, then click "
                        "'Reset breaker' on the Updates page to re-arm.")
 
-    if not deploy_key_present():
-        msg = "Deploy key not generated yet."
-        record_apply_failure(msg)
-        return False, msg
+    auth_err = _auth_block_reason()
+    if auth_err:
+        record_apply_failure(auth_err)
+        return False, auth_err
     if not get_remote_url():
         msg = "No 'origin' remote configured."
         record_apply_failure(msg)
