@@ -10,8 +10,8 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
-from manager.config import display_path
-from manager.paths import appmanifest_path, server_exe, steamcmd_exe
+from manager.config import PROJECT_ROOT, display_path
+from manager.paths import appmanifest_path, install_dir, server_exe, steamcmd_exe
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,46 @@ def check_platform() -> CheckResult:
         name="Windows OS",
         passed=is_windows,
         detail=f"{platform.system()} {platform.release()} (build {platform.version()})",
+        fixable=False,
+    ))
+
+
+def check_install_location() -> CheckResult:
+    """Refuse to bless a setup that would dump the dedicated-server
+    files at a drive root (`C:\\`, `D:\\`).
+
+    The default `install_dir = ".."` (relative to the manager's
+    project root). If the operator cloned the manager into e.g.
+    `C:\\sm-manager-stable\\` directly, install_dir resolves to
+    `C:\\` and SteamCMD would write WSServer.exe, ~10 GB of game
+    data, and the WS\\ tree to the C: root -- polluting the system
+    drive and almost certainly NOT what the operator intended.
+
+    Detection: `install_dir.parts` has length 1 on Windows when
+    the path is a drive root (`('C:\\\\',)`) and on POSIX when
+    it's literal `/` (`('/',)`). Anything deeper is fine.
+
+    Not auto-fixable -- the operator has to move the manager
+    directory themselves. The detail explains what to do.
+    """
+    inst = install_dir()
+    parts = inst.parts
+    at_root = len(parts) <= 1
+    return _record(CheckResult(
+        name="Install location",
+        passed=not at_root,
+        detail=(
+            f"Install dir resolves to {display_path(inst)} -- a drive "
+            f"root. SteamCMD would dump the Soulmask server "
+            f"(~5--15 GB) directly here. Move the manager folder "
+            f"INTO the directory where you want Soulmask installed "
+            f"(e.g. D:\\Soulmask\\sm-manager) and restart -- the "
+            f"manager defaults to '..' for install_dir, so the "
+            f"parent of the manager folder is where the server lands."
+            if at_root else
+            f"Install dir = {display_path(inst)} "
+            f"(manager root: {display_path(PROJECT_ROOT)})"
+        ),
         fixable=False,
     ))
 
@@ -148,6 +188,7 @@ def run_all_checks() -> list[CheckResult]:
     results = [
         check_python_version(),
         check_platform(),
+        check_install_location(),
         check_steamcmd(),
         check_git(),
         check_install(),

@@ -11,6 +11,31 @@ Built for a single operator running one or two cluster nodes.
 
 ## Quick start
 
+**Where to put it.** Clone or extract the manager into a subdirectory
+of where you want the Soulmask server installed. The manager defaults
+to installing the server into its own *parent* directory, so the
+parent is what becomes the install root.
+
+Recommended layout:
+
+```
+D:\Soulmask\                  <- install root (where WSServer.exe ends up)
+  sm-manager\                 <- the manager folder; clone here
+    bootloader.py
+    start_manager.bat
+    manager\
+    data\
+    ...
+```
+
+If you clone the manager to a drive root (`C:\sm-manager-stable\`),
+the server will install at `C:\` itself — pollutes the system drive
+and is almost certainly not what you want. The setup checks page
+flags this and refuses to bless the install until you move the
+folder.
+
+Then:
+
 1. Make sure Python 3.11+ is on PATH.
 2. Double-click `start_manager.bat`.
 3. Open `http://<server-ip>:5000` from any browser on your LAN.

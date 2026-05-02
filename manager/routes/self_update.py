@@ -40,6 +40,7 @@ def index():
         git_resolved=self_update._resolve_binary("git"),
         manager_remote=remote_url,
         manager_remote_keys_url=self_update.github_keys_url(remote_url),
+        auth_required=self_update.remote_needs_auth(remote_url),
         flash_msg=request.args.get("msg"),
         flash_kind=request.args.get("kind"),
     )

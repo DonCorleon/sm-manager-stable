@@ -134,7 +134,7 @@ DEPLOY_KEY_PUB_PATH = DATA_DIR / "deploy_key.pub"
 # this URL and the operator never needs to type it. ensure_remote()
 # sets `origin` to this if no remote is configured yet (which happens
 # on a fresh clone or after `git remote remove`).
-MANAGER_REMOTE_URL = "git@github.com:DonCorleon/sm-manager-stable.git"
+MANAGER_REMOTE_URL = "https://github.com/DonCorleon/sm-manager-stable.git"
 
 # Hard timeout for any single git or ssh-keygen subprocess call. Long
 # enough for slow networks; short enough that a hung remote doesn't
@@ -527,6 +527,25 @@ _GITHUB_REMOTE_RE = re.compile(
 )
 
 
+def remote_needs_auth(remote_url: Optional[str]) -> bool:
+    """True if the remote URL requires SSH-key auth for git operations.
+
+    SSH remotes (`git@host:repo.git`, `ssh://git@host/...`) need a
+    deploy key registered on the remote. HTTPS remotes pull from
+    public repos with no auth and from private repos via the git
+    credential manager / cached PAT -- either way the manager's
+    deploy-key UI doesn't apply.
+
+    Used by the routes to gate the entire Auth-setup section when
+    pointing at a public stable repo: showing "Deploy key not
+    generated yet" on a clone that pulls fine over HTTPS is
+    misleading noise.
+    """
+    if not remote_url:
+        return False
+    return remote_url.startswith("git@") or remote_url.startswith("ssh://")
+
+
 def github_keys_url(remote_url: Optional[str]) -> Optional[str]:
     """Derive the GitHub deploy-keys page URL from a git remote URL.
 
@@ -569,7 +588,7 @@ def ensure_remote() -> tuple[bool, str]:
     workstation without a deploy key.
 
     Operator can manually switch to the SSH form via the shell:
-        git remote set-url origin git@github.com:DonCorleon/sm-manager-stable.git
+        git remote set-url origin https://github.com/DonCorleon/sm-manager-stable.git
     """
     current = get_remote_url()
     if current:

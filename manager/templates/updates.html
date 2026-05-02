@@ -142,7 +142,7 @@
       <a href="/setup/" class="underline hover:text-rose-100">Setup wizard</a>
       &mdash; it installs PortableGit alongside SteamCMD on first run.
     </div>
-  {% elif not status.deploy_key_present %}
+  {% elif auth_required and not status.deploy_key_present %}
     <div class="bg-amber-900/30 border border-amber-700 rounded p-3 text-sm text-amber-200">
       <strong>Deploy key not generated yet.</strong>
       Set up the manager's git auth in
@@ -271,9 +271,12 @@
     <div class="flex flex-wrap gap-2">
       <form method="POST" action="{{ url_for('self_update.check') }}"
             data-busy-text="Checking…">
+        {# Need git always; deploy key only matters on SSH remotes
+           (HTTPS public clones pull with no auth setup). #}
+        {% set need_key = auth_required and not status.deploy_key_present %}
         <button type="submit"
-                {% if not status.deploy_key_present or not git_resolved %}disabled
-                title="Need git + a deploy key first"
+                {% if need_key or not git_resolved %}disabled
+                title="{% if not git_resolved %}Git not available{% else %}Need a deploy key first{% endif %}"
                 class="px-3 py-1.5 rounded text-sm bg-slate-800 text-slate-500 cursor-not-allowed"
                 {% else %}
                 class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600"

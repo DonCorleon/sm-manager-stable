@@ -184,12 +184,15 @@
             </div>
           {% endif %}
 
-          {% if section.title == "Manager update detection" %}
+          {% if section.title == "Manager update detection" and auth_required %}
             {# Manager git-auth setup. Same form="..." pattern -- buttons
                here associate with sibling forms below the outer settings
                form via form-attribute, since HTML5 forbids form nesting.
                Auth lives next to the auto-update-poll settings because
-               configuring auth is what makes those settings useful. #}
+               configuring auth is what makes those settings useful.
+
+               Gated on `auth_required` so HTTPS public-repo clones
+               don't see this whole block (they pull without any auth). #}
             <div class="pt-2 border-t border-slate-700 space-y-3">
               <div class="text-sm font-medium text-slate-200">Auth setup</div>
               {% if not git_resolved %}
@@ -328,6 +331,28 @@
     <input type="hidden" name="overwrite" value="1">
   </form>
   <form id="git-test-form" method="POST" action="{{ url_for('self_update.test_connection') }}"></form>
+
+  <!-- Setup wizard entry point. The wizard handles cluster mode + map
+       selection + per-instance config + SteamCMD install -- it's
+       conceptually one rung up from the schema-driven settings here
+       (it WRITES the [server] section those settings depend on). The
+       page hands first-run operators here automatically; this card
+       is the way back in once they've finished. -->
+  <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
+    <h3 class="text-base font-semibold mb-1">Setup wizard</h3>
+    <p class="text-xs text-slate-400 mb-4">
+      Re-run the cluster setup: change mode (single &harr; cluster),
+      pick a different gameplay template, edit instance names / ports,
+      or verify / re-install the Soulmask server via SteamCMD. The
+      wizard writes the <code class="font-mono">[server]</code>
+      section of <code class="font-mono">data/settings.toml</code> and
+      regenerates <code class="font-mono">GameXishu.json</code>.
+    </p>
+    <a href="/setup/"
+       class="inline-block bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-medium">
+      Open setup wizard
+    </a>
+  </div>
 
   <!-- Manager actions -->
   <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">

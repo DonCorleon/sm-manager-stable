@@ -29,9 +29,10 @@ log = logging.getLogger(__name__)
 def _git_auth_context() -> dict:
     """Resolve the bits the git-auth-setup section in settings.html needs:
     deploy key presence + public key, manager remote URL, derived deploy-
-    keys page URL, and whether git itself is installed. Used in every
-    render path; isolated here so the route bodies stay focused on the
-    form-handling work."""
+    keys page URL, whether git itself is installed, and whether the
+    remote needs SSH-key auth at all. Used in every render path;
+    isolated here so the route bodies stay focused on the form-handling
+    work."""
     from manager import self_update
     remote_url = self_update.get_remote_url() or self_update.MANAGER_REMOTE_URL
     return {
@@ -39,6 +40,7 @@ def _git_auth_context() -> dict:
         "git_resolved": bool(self_update._resolve_binary("git")),
         "manager_remote": remote_url,
         "manager_remote_keys_url": self_update.github_keys_url(remote_url),
+        "auth_required": self_update.remote_needs_auth(remote_url),
     }
 
 
