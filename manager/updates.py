@@ -328,6 +328,17 @@ def _poller_loop() -> None:
     # Initial check fires after a short delay so we don't slow startup.
     time.sleep(15)
     while True:
+        # Skip silently on a fresh install before SteamCMD is laid down --
+        # the wizard installs it during /setup/. Without this gate the
+        # poller would set last_error to "SteamCMD did not return a
+        # buildid" on every cycle and clutter /updates with red banners
+        # before the operator has even configured anything.
+        from manager.paths import steamcmd_exe
+        if not steamcmd_exe().exists():
+            log.debug("Steam poller: SteamCMD not installed yet -- "
+                      "skipping iteration silently")
+            time.sleep(_poll_interval_sec())
+            continue
         # Skip iteration if any other SteamCMD op is in progress
         # (operator-clicked Check Steam, or the big app_update inside
         # Update+Restart). Don't queue, just bail and try next interval.

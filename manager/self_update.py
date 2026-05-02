@@ -1293,22 +1293,42 @@ def check_for_updates_now(stream: bool = False) -> dict:
     updates' button so both paths share state.
 
     `stream=True` writes to updates_log for the SSE consumer; the
-    periodic poller passes False to stay silent."""
-    if not deploy_key_present():
-        log.verbose("manager-update check skipped: no deploy key yet")
-        with _poll_state_lock:
-            _poll_state["last_check_at"] = datetime.now()
-            _poll_state["last_check_ok"] = False
-            _poll_state["last_error"] = "no deploy key"
-        return get_poll_state()
+    periodic poller passes False to stay silent.
 
+    Preconditions on a fresh install: not a git checkout (ZIP extract),
+    git binary not yet installed (PortableGit lands during /setup/),
+    SSH remote without a deploy key. All three skip silently -- they're
+    expected states during first-launch and writing them as `last_error`
+    surfaces red banners before the operator has even configured the
+    manager. The UI's own template branches (is_git_checkout,
+    git_resolved, auth_required-and-no-deploy-key) handle each case
+    with appropriate messaging.
+    """
+    # Skip silently when prerequisites aren't ready. None of these
+    # touch _poll_state -- callers see the previous state, dashboard
+    # renders without an error banner. The synthesised return dict
+    # IS populated with last_error so a user-clicked Check still gets
+    # a meaningful op-end marker (the poller throws away the return).
+    def _skipped(reason: str) -> dict:
+        return {**get_poll_state(),
+                "last_check_ok": False,
+                "last_error": reason}
+
+    if not is_git_checkout():
+        log.verbose("manager-update check skipped: not a git checkout "
+                    "(ZIP-extract install)")
+        return _skipped("not a git checkout (see /updates page for re-clone "
+                        "instructions)")
     if _resolve_binary("git") is None:
-        log.verbose("manager-update check skipped: git not resolvable")
-        with _poll_state_lock:
-            _poll_state["last_check_at"] = datetime.now()
-            _poll_state["last_check_ok"] = False
-            _poll_state["last_error"] = "git not available"
-        return get_poll_state()
+        log.verbose("manager-update check skipped: git binary not resolvable "
+                    "(PortableGit installs during /setup/)")
+        return _skipped("git not yet installed (run the setup wizard)")
+    remote_url = get_remote_url() or MANAGER_REMOTE_URL
+    if remote_needs_auth(remote_url) and not deploy_key_present():
+        log.verbose("manager-update check skipped: SSH remote, deploy key "
+                    "not generated yet (operator-action gate)")
+        return _skipped("deploy key not generated yet (Settings -> Manager "
+                        "update detection -> Generate deploy key)")
 
     log.info("Manager update check starting (git fetch origin main)...")
     ok, msg = fetch(stream=stream)
