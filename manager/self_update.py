@@ -527,6 +527,25 @@ _GITHUB_REMOTE_RE = re.compile(
 )
 
 
+def is_git_checkout() -> bool:
+    """True if the manager is running from a real git clone, False if
+    it's a ZIP-extracted install with no `.git/` directory.
+
+    Detection is filesystem-only -- we don't shell out to git, so this
+    works even before PortableGit has been installed by the wizard.
+    The `.git` entry can be a directory (normal clone) or a file (git
+    worktree linkfile); either counts.
+
+    Used to gate the entire manager-update UI surface: a ZIP-extracted
+    install can't fetch / pull / apply, and the broken cascade of "git
+    status failed; treating as dirty defensively" + "Current SHA: ?"
+    on /updates is a confusing way to report that. We replace it with
+    a single clear "this isn't a git checkout" card pointing at the
+    fix.
+    """
+    return (PROJECT_ROOT / ".git").exists()
+
+
 def remote_needs_auth(remote_url: Optional[str]) -> bool:
     """True if the remote URL requires SSH-key auth for git operations.
 

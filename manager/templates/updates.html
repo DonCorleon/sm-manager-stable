@@ -135,7 +135,36 @@
   </div>
 
   <!-- ── Manager (git) updates ───────────────────────────────────── -->
-  {% if not git_resolved %}
+  {% if not is_git_checkout %}
+    <div class="bg-amber-900/30 border border-amber-700 rounded p-4 text-sm text-amber-200 space-y-2">
+      <div><strong>&#9888; This install isn't a git checkout &mdash; auto-updates can't run.</strong></div>
+      <p>
+        Looks like this folder was extracted from a GitHub ZIP download
+        (there's no <code class="font-mono">.git/</code> directory).
+        The manager needs a real git clone to fetch new commits, so the
+        Apply / Check / Force-sync flow below isn't available here.
+      </p>
+      <p class="font-medium">To fix it:</p>
+      <ol class="list-decimal list-inside space-y-1">
+        <li>Stop the manager (Ctrl+C in the cmd window).</li>
+        <li>
+          From a parent directory, re-clone with git:
+          <pre class="font-mono text-xs bg-slate-950/50 rounded p-2 mt-1 whitespace-pre-wrap break-all">git clone {{ manager_remote }} sm-manager</pre>
+        </li>
+        <li>
+          Copy your <code class="font-mono">data/</code> folder from this
+          install into the new clone (it has settings, backups, deploy
+          key, players DB).
+        </li>
+        <li>Run <code class="font-mono">start_manager.bat</code> in the new folder.</li>
+      </ol>
+      <p class="text-xs text-amber-300/80">
+        Alternatively, keep this install and re-download a fresh ZIP from
+        GitHub each time you want to update &mdash; manual but works fine
+        for occasional updates.
+      </p>
+    </div>
+  {% elif not git_resolved %}
     <div class="bg-rose-900/30 border border-rose-700 rounded p-4 text-sm text-rose-200">
       <strong>Git not found.</strong> Manager updates require git on
       this machine. Run the
@@ -151,7 +180,9 @@
     </div>
   {% endif %}
 
-  <!-- Manager apply -->
+  <!-- Manager apply (suppressed entirely when not a git checkout --
+       the warning card above stands in for it). -->
+  {% if is_git_checkout %}
   <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">
     <div class="flex items-baseline justify-between mb-3">
       <h3 class="text-base font-semibold">Manager (git) &mdash; apply</h3>
@@ -299,6 +330,7 @@
       </form>
     </div>
   </div>
+  {% endif %}
 
   <!-- ── Live activity log ─────────────────────────────────────────── -->
   <div class="bg-slate-800 rounded-lg p-5 border border-slate-700">

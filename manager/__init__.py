@@ -21,4 +21,4 @@ if not hasattr(_logging.Logger, "verbose"):
     _logging.Logger.verbose = _verbose  # type: ignore[attr-defined]
 
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
